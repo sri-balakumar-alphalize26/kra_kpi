@@ -100,17 +100,24 @@ describe('gateLabel — no badge when there is nothing to wait for', () => {
 });
 
 describe('gateLabel — approval gates', () => {
-  test('admin gate without a deadline', () => {
+  test('admin gate without a stage label', () => {
     expect(gateLabel({ can_start: false, start_block_reason: 'admin', task_state: 'assigned' }))
-      .toBe('Waiting for an admin to accept this task');
+      .toBe('Waiting for approval');
   });
 
-  test('admin gate with a deadline names the time', () => {
+  test('admin gate shows where the approval chain stands', () => {
+    expect(gateLabel({
+      can_start: false, start_block_reason: 'admin', task_state: 'assigned',
+      approval_stage_label: 'Waiting for approval — Level 1: Manager (Ravi)',
+    })).toBe('Waiting for approval — Level 1: Manager (Ravi)');
+  });
+
+  test('a stale accept deadline never brings back a countdown', () => {
     const out = gateLabel({
       can_start: false, start_block_reason: 'admin', task_state: 'assigned',
       admin_accept_deadline_at: '2026-07-29 09:05:00',
     });
-    expect(out).toMatch(/^Waiting on admin — accepts automatically at \d{1,2}:\d{2}/);
+    expect(out).not.toMatch(/automatically/);
   });
 
   test('a held client approval is called out separately', () => {
@@ -120,9 +127,11 @@ describe('gateLabel — approval gates', () => {
     })).toBe('Client put approval on hold');
   });
 
-  test('client gate falls back to undated wording with no release time', () => {
-    expect(gateLabel({ can_start: false, start_block_reason: 'client', task_state: 'assigned' }))
-      .toBe('Waiting for the client to approve');
+  test('client gate waits for the client, with no release time', () => {
+    expect(gateLabel({
+      can_start: false, start_block_reason: 'client', task_state: 'assigned',
+      pre_approval_release_at: '2026-07-29 09:05:00',
+    })).toBe('Waiting for client approval');
   });
 });
 

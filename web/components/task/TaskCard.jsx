@@ -68,7 +68,9 @@ function TaskCard({ task: t, selected, onOpen, dragging, dragHandle, actions, on
         {t.estimate_extension_count > 0 && <Lozenge tone="neutral" style={{ textTransform: "none" }} title={`Extended ${t.estimate_extension_count} time(s) by ${t.estimate_extended_by_name || "someone"}`}>+{t.estimate_extension_count} ext</Lozenge>}
         {late && <Lozenge tone="danger">Past deadline · {t.deadline}</Lozenge>}
         {t.pre_approval_auto_released && !t.pre_approval_decision && <Lozenge tone="neutral" style={{ textTransform: "none" }} title="The client did not reply within the approval window, so work was released. This is not their approval — they can still object, and sign-off is still required before billing.">Released — no client reply</Lozenge>}
-        {t.admin_accepted_auto && <Lozenge tone="neutral" style={{ textTransform: "none" }} title="No admin actioned this within the accept window, so it was accepted automatically. It can still be re-categorised or rejected.">Auto-accepted</Lozenge>}
+        {/* Where the approval stands (approval chain → client), in place of the old
+            auto-accept countdown. The Start hint below already says it when it is the gate. */}
+        {t.approval_stage_label && t.approval_stage_label !== gate && <Lozenge tone={t.approval_stage_label.startsWith("Rejected") ? "danger" : "review"} title={t.approval_stage_label} style={{ display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, height: "auto", lineHeight: "16px", padding: "1px 6px", maxWidth: "100%", overflow: "hidden", overflowWrap: "anywhere", textTransform: "none" }}>{t.approval_stage_label}</Lozenge>}
       </div>
       {t.reverted_from && (
         <div className="cd-note warn">

@@ -23,6 +23,7 @@ export const KINDS = [
   { key: "db_live", label: "Database waiting to go live", tab: "Go-live" },
   { key: "meeting", label: "Meeting asked for", tab: "Meetings" },
   { key: "qa", label: "Work finished, needs checking", tab: "QA checks" },
+  { key: "self_task", label: "Developer created a task", tab: "Developer tasks" },
 ];
 export const kindLabel = (k) => KINDS.find((x) => x.key === k)?.label || k;
 
@@ -33,7 +34,7 @@ export const waitingCounts = () => kw("kpi.approval", "waiting_counts", []);
 export const listApprovals = () => kw("kpi.approval", "search_read", [[]], { fields: APPROVAL_FIELDS, limit: 500, order: "requested_on desc, id desc" });
 
 /* Approve / Refuse. A decision that needs nothing more (approve QA, approve
-   go-live) is done here and answers a notification; anything else answers an
+   go-live, accept a developer's own task) is done here and answers a notification; anything else answers an
    act_window for the decide dialog, whose context carries the prefills. */
 function outcome(res, decision) {
   if (res && res.type === "ir.actions.client") return { done: true, message: (res.params && res.params.message) || "Done." };

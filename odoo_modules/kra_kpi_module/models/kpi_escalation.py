@@ -1,7 +1,7 @@
 """Approval chain for new client requests (call notes, Oct 2026).
 
-A new client request (requirement / bug / update / new database) first goes
-to tier 1. A destroy-database request does not climb: it goes straight to the
+A new client request (requirement / bug / update / new database), and since
+19.0.8.6 a task a developer created for themselves, first goes to tier 1. A destroy-database request does not climb: it goes straight to the
 client's manager in the KRA tree (kpi_wa_admin_link._wa_admin_recipients). If nobody there decides within that tier's minutes, the
 decision link goes to tier 2, then 3, then 4. After the last tier nothing is
 accepted automatically: the last tier is reminded every LAST_TIER_REMIND_MIN
@@ -23,10 +23,11 @@ from odoo import api, fields, models
 _logger = logging.getLogger(__name__)
 
 LAST_TIER_REMIND_MIN = 30
-# Which decisions climb the chain. Finished work (qa) and a developer's own
-# task (self_task) keep going to the task's managers straight away.
+# Which decisions climb the chain. A developer's own task (self_task) climbs it
+# too since 19.0.8.6, in place of the old 5-minute auto-accept. Finished work
+# (qa) keeps going to the task's managers straight away.
 # A destroy request ('disconnect') is the client's manager's alone: no chain.
-CHAIN_KINDS = ('new_request', 'new_database')
+CHAIN_KINDS = ('new_request', 'new_database', 'self_task')
 
 
 class KpiEscalationTier(models.Model):
@@ -57,6 +58,44 @@ class KraKpiEscalation(models.Model):
     esc_tier_id = fields.Many2one('kpi.escalation.tier', string='Approval Tier',
                                   copy=False, ondelete='set null', readonly=True)
     esc_due_at = fields.Datetime(string='Next Tier At', copy=False, index=True, readonly=True)
+    # Where the approval stands, in words, for every board (web, app, OWL) in
+    # place of the old auto-accept / auto-release countdowns.
+    approval_stage_label = fields.Char(compute='_compute_approval_stage_label')
+
+    @api.depends('esc_tier_id', 'admin_accepted', 'is_self_created', 'published', 'active',
+                 'self_needs_resume_reason', 'self_review_note', 'task_state', 'decline_note')
+    def _compute_approval_stage_label(self):
+        tiers = self.env['kpi.escalation.tier'].chain()
+        for rec in self:
+            try:
+                rec.approval_stage_label = rec.sudo()._approval_stage(tiers)
+            except Exception as exc:
+                _logger.warning('approval stage for %s failed: %s', rec.id, exc)
+                rec.approval_stage_label = ''
+
+    def _approval_stage(self, tiers):
+        """'Waiting for approval — Level 1: Manager (Ravi)', 'Waiting for
+        client approval', 'Rejected: <why>', or '' when nothing is waiting."""
+        self.ensure_one()
+        if self.is_self_created and not self.admin_accepted:
+            if not self.active or self.self_needs_resume_reason:
+                # Sent back (or discarded) with a reason: the developer sees it.
+                return 'Rejected: %s' % (self.self_review_note or self.decline_note or 'no reason given')
+        if not self.active:
+            if self._is_refused():
+                return 'Rejected: %s' % (self.decline_note or 'no reason given')
+            return ''
+        if self._esc_needs_decision():
+            tier = self.esc_tier_id
+            if tier and tier in tiers:
+                level = list(tiers.ids).index(tier.id) + 1
+                names = ', '.join(self._esc_tier_users(tier).mapped('name'))
+                return 'Waiting for approval — Level %d: %s%s' % (
+                    level, tier.name, (' (%s)' % names) if names else '')
+            return 'Waiting for approval — managers'
+        if self.task_state == 'pre_approval_pending':
+            return 'Waiting for client approval'
+        return ''
 
     def _esc_tier_users(self, tier):
         """Who this step asks: exactly the people named on it, admin or not.
@@ -83,6 +122,10 @@ class KraKpiEscalation(models.Model):
         self.ensure_one()
         if not self.active:
             return False
+        # A developer's own task is published from the start; it waits until it
+        # is accepted. Sent back, it waits on the developer instead, not here.
+        if self.is_self_created and not self.admin_accepted:
+            return not self.self_needs_resume_reason
         if self.request_category == 'db_disconnect':
             db = self.env['kpi.client.db'].sudo().search(
                 [('disconnect_request_kpi_id', '=', self.id)], limit=1) or self.client_db_id

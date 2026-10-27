@@ -21,7 +21,7 @@ import {
   getClientLinks, getDbFormLink, getChatLink, getReviewDays,
 } from '../services/clientPortal';
 import SignaturePad from '../components/SignaturePad';
-import { parseServerTs, reviewDueText, signerOptions, signoffReady } from '../utils/clientSignoff';
+import { reviewDueText, signerOptions, signoffReady } from '../utils/clientSignoff';
 import * as WebBrowser from 'expo-web-browser';
 // /legacy: this screen uses StorageAccessFramework, EncodingType,
 // writeAsStringAsync and cacheDirectory, all of which SDK 54 moved off the bare
@@ -188,38 +188,11 @@ function CollapsibleSection({ icon, label, count, open, onToggle, children }) {
   );
 }
 
-// Live countdown to auto-approval. Anchored to the SERVER clock (server_now) so a
-// device with the wrong time still counts down correctly.
-//
-// Only ever promises an auto-approve when the server says one is really coming
-// (`auto_approves`, which mirrors the cron's exact domain). A held task, or a
-// non-client task that can never auto-approve, says so instead of counting down
-// to something that will never happen.
-function Countdown({ deadlineAt, serverNow, autoApproves, held }) {
-  const deadline = parseServerTs(deadlineAt);
-  const srvNow = parseServerTs(serverNow);
-  // Offset between this device's clock and the server's, measured once on mount.
-  const skewRef = useRef(deadline && srvNow ? Date.now() - srvNow : 0);
-  const [left, setLeft] = useState(0);
-
-  useEffect(() => {
-    if (!deadline || !autoApproves) return undefined;
-    const tick = () => setLeft(Math.max(0, deadline - (Date.now() - skewRef.current)));
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [deadline, autoApproves]);
-
-  if (held) return <Text style={s.cdHeld}>⏸ Held — won't approve automatically</Text>;
-  // No auto-approve coming → never imply one.
-  if (!autoApproves || !deadline) return <Text style={s.cdWait}>⚠️ Awaiting your approval</Text>;
-  if (left <= 0) return <Text style={s.cdDue}>⏳ Approving automatically…</Text>;
-  const total = Math.floor(left / 1000);
-  const m = Math.floor(total / 60);
-  const sec = total % 60;
-  // Drop the minutes segment under a minute → "(45s left)", not "(0m 45s left)".
-  const rem = m > 0 ? `${m}m ${sec}s left` : `${sec}s left`;
-  return <Text style={s.cd}>⏳ Approving automatically ({rem})</Text>;
+// Where the client's approval stands. Since module 19.0.8.6 nothing approves or
+// releases a task by itself, so there is no countdown: the client decides.
+function Countdown({ held }) {
+  if (held) return <Text style={s.cdHeld}>⏸ Held — the team will not start</Text>;
+  return <Text style={s.cdWait}>⚠️ Waiting for your approval</Text>;
 }
 
 function ApprovalCard({ t, busy, onApprove, onReject, onToggleHold, pulse, onLayout }) {
@@ -246,11 +219,8 @@ function ApprovalCard({ t, busy, onApprove, onReject, onToggleHold, pulse, onLay
         </Text>
       ) : null}
       <View style={s.cdRow}>
-        <Countdown
-          deadlineAt={t.deadline_at} serverNow={t.server_now}
-          autoApproves={t.auto_approves} held={t.held}
-        />
-        {/* Stop the clock and decide later; Approve/Reject stay usable either way. */}
+        <Countdown held={t.held} />
+        {/* Hold: the team will not start; Approve/Reject stay usable either way. */}
         <TouchableOpacity
           style={[s.holdBtn, busy && s.actDisabled]} onPress={() => onToggleHold(t)}
           disabled={busy} activeOpacity={0.85} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -537,8 +507,8 @@ export default function ClientTasks({ onBack, focusTaskId }) {
         server_now: res.server_now || x.server_now,
       } : x)));
       flashToast(res.held
-        ? 'Held — it won\'t approve automatically.'
-        : 'Resumed — the countdown restarted.');
+        ? 'Held — the team will not start.'
+        : 'Resumed — waiting for your approval.');
     } catch (e) {
       log.error('hold failed', e?.message);
       flashToast(e.message || 'Could not update the hold');

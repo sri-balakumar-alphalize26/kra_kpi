@@ -50,15 +50,12 @@ function gateLabel(task) {
   // to "Waiting for the client to approve", which blames the wrong party
   // entirely for a limit the developer can clear themselves.
   if (task.start_block_reason === 'multitask') return 'Pause your running task first';
-  if (task.start_block_reason === 'admin') {
-    return task.admin_accept_deadline_at
-      ? `Waiting on admin — accepts automatically ${fmtWhen(task.admin_accept_deadline_at)}`
-      : 'Waiting for an admin to accept this task';
-  }
+  // Nothing is accepted or released automatically (module 19.0.8.6): say where
+  // the approval stands (approval_stage_label, e.g. "Waiting for approval —
+  // Level 1: Manager (Ravi)"), never a countdown.
+  if (task.start_block_reason === 'admin') return task.approval_stage_label || 'Waiting for approval';
   if (task.pre_approval_held) return 'Client put approval on hold';
-  return task.pre_approval_release_at
-    ? `Waiting on client — releases ${fmtWhen(task.pre_approval_release_at)}`
-    : 'Waiting for the client to approve';
+  return task.approval_stage_label || 'Waiting for client approval';
 }
 
 module.exports = { gateLabel, fmtWhen };

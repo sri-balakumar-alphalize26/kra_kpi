@@ -81,8 +81,8 @@ export const MULTITASK_PATH = "/kpi_multitask/list";
 export const fetchConfig = () => read(CONFIG_PATH, {}, { ttl: 10000 });
 export const fetchDevelopers = () => read(MULTITASK_PATH, {}, { ttl: 10000 }).then((r) => r?.developers || []);
 export const cfgSet = {
-  adminAccept: (minutes) => rpc("/kpi_config/set_admin_accept", { minutes }),
-  clientApproval: (minutes) => rpc("/kpi_config/set_client_approval", { minutes }),
+  /* adminAccept / clientApproval retired (module 19.0.8.6): nothing is accepted or
+     released automatically, so those windows are no longer set from here. */
   queueNudge: (minutes) => rpc("/kpi_config/set_queue_nudge", { minutes }),
   urgentNudge: (minutes) => rpc("/kpi_config/set_urgent_nudge", { minutes }),
   /* WhatsApp number(s), comma-separated, that get each End Workday's "What did you work on today?". */

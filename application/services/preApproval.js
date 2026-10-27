@@ -1,8 +1,8 @@
 // Stage-1 client pre-approval — IN-APP. When an admin assigns a developer to a
 // client's task, the client is asked (in-app, via the bell + push) to sign off on
 // WHO it went to. They Approve / Reject right here — no WhatsApp link, no token.
-// If they stay silent the server auto-approves after the configured window
-// (res.company.client_approval_minutes, Configuration → Timers & Away).
+// Since module 19.0.8.6 silence never approves or releases anything: the task
+// waits until they decide (the server only sends reminders).
 //
 // Wraps /kpi_pre_approval/* in controllers/kpi_reports_api.py. Both routes are
 // caller-scoped SERVER-SIDE, so a client only ever sees / decides their own tasks.
@@ -15,8 +15,8 @@ const log = createLogger('PreApproval');
 // Tasks awaiting THIS client's approval → the "Approval needed" section.
 // Each: { id, name, kind, external_ref, description, client_name, project_name,
 //         priority, task_state, developer, deadline_at, server_now }
-// `deadline_at` + `server_now` drive the "auto-approves in mm:ss" countdown —
-// both are server clocks, so a wrong device time can't skew it.
+// `deadline_at` is empty now that nothing releases by itself; the card shows a
+// plain "Waiting for your approval" instead of a countdown.
 export async function fetchPreApprovals() {
   const { serverUrl, db } = await getConnection();
   if (!serverUrl) return { kpis: [] };

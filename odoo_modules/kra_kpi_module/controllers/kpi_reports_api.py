@@ -2757,14 +2757,9 @@ class KpiReportsAPI(http.Controller):
             # gate, which is the first step of the workflow.
             msg = f'Published: {kpi.name}'
             if kpi.task_state in ('assigned', 'queue_waiting') and not kpi.admin_accepted:
-                # Say WHEN, not just that it is waiting — acceptance now happens
-                # by itself, so "waiting for admin acceptance" alone would read
-                # as "go find an admin" when in fact nobody needs to do anything.
-                msg += ' — the client is asked once the task is accepted'
-                if kpi.admin_accept_deadline_at:
-                    msg += (' (automatically by %s if no admin acts)'
-                            % kpi.admin_accept_deadline_at.strftime('%H:%M'))
-                msg += '.'
+                # Nothing is accepted automatically (19.0.8.6): an admin or the
+                # approval chain has to accept it first.
+                msg += ' — the client is asked once the task is accepted.'
             elif kpi.task_state in ('assigned', 'queue_waiting'):
                 try:
                     kpi.request_client_pre_approval()
@@ -6980,14 +6975,11 @@ class KpiReportsAPI(http.Controller):
                     'task_state': k.task_state or '',
                     # Who the admin assigned — the thing being approved.
                     'developer': k.user_id.name if k.user_id else '',
-                    # Drives the app's countdown. The RELEASE clock, not the
-                    # reminder clock: the reminder deadline is cleared once the
-                    # nudges run out, which would freeze the countdown at 0
-                    # while the task was in fact still waiting.
+                    # The RELEASE clock only. Since 19.0.8.6 nothing releases by
+                    # itself, so this is empty and the app shows a plain
+                    # "Waiting for your approval" instead of a countdown.
                     'deadline_at': (k.pre_approval_release_at.strftime('%Y-%m-%d %H:%M:%S')
-                                    if k.pre_approval_release_at
-                                    else (k.pre_approval_deadline_at.strftime('%Y-%m-%d %H:%M:%S')
-                                          if k.pre_approval_deadline_at else '')),
+                                    if k.pre_approval_release_at else ''),
                     'server_now': fields.Datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                     # Whether this task will ACTUALLY auto-release, decided here so
                     # the app never has to re-derive the rule (and never promises

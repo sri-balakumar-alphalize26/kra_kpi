@@ -183,9 +183,11 @@ function DecideDialog({ d, onClose, onDone }) {
   const needDev = approve && (k === "new_request" || k === "new_database");
   const needWhen = approve && k === "meeting";
   const needReason = !approve || k === "disconnect";
-  const noteRequired = needReason && (k === "db_live" || k === "qa" || k === "disconnect");
-  const showReasonPick = needReason && k !== "db_live" && k !== "qa";
-  const showTell = k !== "db_live" && (!approve || k === "disconnect");
+  /* A developer's own task: refusing needs their reason (they see "Rejected: …");
+     it is not a client message, so no reason list and no "Tell the client". */
+  const noteRequired = needReason && (k === "db_live" || k === "qa" || k === "disconnect" || k === "self_task");
+  const showReasonPick = needReason && k !== "db_live" && k !== "qa" && k !== "self_task";
+  const showTell = k !== "db_live" && k !== "self_task" && (!approve || k === "disconnect");
   const [users, setUsers] = useState([]);
   const [reasons, setReasons] = useState([]);
   const [f, setF] = useState({ user_id: "", scheduled_start: "", organizer_id: "", reason_id: "", note: "", tell_client: true });

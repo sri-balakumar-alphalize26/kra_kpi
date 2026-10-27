@@ -160,9 +160,14 @@ def _gate_keys(k):
             k.pre_approval_deadline_at.strftime(fmt) if k.pre_approval_deadline_at else ''),
         'pre_approval_release_at': (
             k.pre_approval_release_at.strftime(fmt) if k.pre_approval_release_at else ''),
+        # Retired clocks (19.0.8.6): nothing arms them any more, so both stay
+        # empty. Kept for older app builds that still read them.
         'admin_accept_deadline_at': (
             k.admin_accept_deadline_at.strftime(fmt) if k.admin_accept_deadline_at else ''),
         'admin_accepted_auto': k.admin_accepted_auto,
+        # Where the approval stands, in words — what the boards show instead of
+        # a countdown (kpi_escalation._approval_stage).
+        'approval_stage_label': k.approval_stage_label or '',
     }
 
 
@@ -892,9 +897,10 @@ class KraKpiAPI(http.Controller):
             'self_needs_resume_reason': False,
         })
         # The developer has answered the send-back, so the task is waiting on an
-        # admin again — restart the acceptance clock (force=True: the send-back
-        # cleared it, and a revised task must not sit un-timed forever).
-        rec._arm_admin_accept_deadline(force=True)
+        # approver again — ask the approval chain from its first step (this used
+        # to restart the retired auto-accept clock). Never raises.
+        if rec.is_self_created and not rec.admin_accepted:
+            rec._wa_ask_admins('self_task')
         try:
             rec.resume_task()
         except (ValidationError, UserError) as exc:
@@ -3130,6 +3136,10 @@ class KraKpiAPI(http.Controller):
             return {'status': False, 'message': 'Task not found'}
         if not rec.is_self_created or rec.admin_accepted:
             return {'status': False, 'message': 'This task is not awaiting acceptance.'}
+        # A refusal always says why: the developer sees "Rejected: <reason>"
+        # (approval_stage_label), on every channel.
+        if not note:
+            return {'status': False, 'message': 'Say why — the developer sees it.'}
 
         try:
             rec._notify('self_task_rejected', title=rec.name,
@@ -3147,7 +3157,9 @@ class KraKpiAPI(http.Controller):
             # Clear the clock as well as archiving. The cron already filters on
             # active=True, but leaving a live deadline on a discarded row is a
             # trap for anyone who un-archives it later.
-            rec.write({'active': False, 'admin_accept_deadline_at': False})
+            rec.write({'active': False, 'admin_accept_deadline_at': False,
+                       'esc_due_at': False,
+                       'self_review_note': note, 'self_review_by': user.name})
             return {'status': True, 'discarded': True, 'message': 'Task discarded.'}
         # A sent-back task shouldn't keep clocking time — if the dev is actively
         # working it, pause it: stop the clock (preserve the accrued total) and
@@ -3166,11 +3178,10 @@ class KraKpiAPI(http.Controller):
             'self_review_note': note or 'Please revise',
             'self_review_by': user.name,
             'self_needs_resume_reason': True,
-            # STOP the auto-accept clock. Silence is what auto-accept answers;
-            # this admin did not stay silent, they said no. Without this the
-            # cron would accept the very task they just sent back, minutes
-            # later. Re-armed when the developer answers on Resume.
+            # The approval chain stops too: it now waits on the developer. It
+            # starts again from step 1 when they answer on Resume.
             'admin_accept_deadline_at': False,
+            'esc_due_at': False,
         })
         return {'status': True, 'discarded': False,
                 'message': 'Task sent back to the developer.'}

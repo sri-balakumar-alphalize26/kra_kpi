@@ -144,9 +144,10 @@ class KpiWaTaskForm(http.Controller):
             router = request.env['kpi.wa.group.router'].sudo().with_context(
                 kpi_wa_state_id=st.id, kpi_wa_owner_name=user.name or '',
                 kpi_wa_owner_mark=user._kpi_wa_color()[0])
-            router._text(msg, '✅ %s, your task %s — "%s" is created.\n⏳ It comes to you to start '
-                              'once the admin and the client approve it.'
-                         % (user.name or '', task.external_ref or '', task.name or ''))
+            router._text(msg, '✅ %s, your task %s — "%s" is created.\n⏳ %s. You can start '
+                              'once it is approved, then the client approves it.'
+                         % (user.name or '', task.external_ref or '', task.name or '',
+                            task.approval_stage_label or 'Waiting for approval'))
             st.sudo()._reset()
             router._staff_offer_actions(msg, st, task)
         except Exception as exc:

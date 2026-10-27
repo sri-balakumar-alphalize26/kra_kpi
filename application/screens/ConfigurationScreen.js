@@ -30,7 +30,7 @@ import { createLogger } from '../api/logger';
 // login mobile server-side, which is Login Management's business, not this card's.
 import {
   fetchConfig, setUrgentNudge, setMultitask,
-  setClientApproval, setQueueNudge, setStandardHours, setAdminAccept, setBreakAlerts,
+  setQueueNudge, setStandardHours, setBreakAlerts,
   setSnapshotRetention, setReportRetention, setDailyReport, setAttendanceInApp,
 } from '../services/config';
 import { fetchGroupEvents, setGroupEvent, testGroupEvent } from '../services/waGroup';
@@ -85,7 +85,6 @@ export default function ConfigurationScreen({ onBack, onOpen }) {
   const [fin, setFin] = useState(null);
   const [reviewDays, setReviewDays] = useState('');
   const [isMock, setIsMock] = useState(false);
-  const [clientApproval, setClientApprovalVal] = useState('5');
   const [queueNudge, setQueueNudgeVal] = useState('30');
   const [standardHours, setStandardHoursVal] = useState('9');
   const [urgentNudge, setUrgentNudgeVal] = useState('5');
@@ -110,7 +109,6 @@ export default function ConfigurationScreen({ onBack, onOpen }) {
   const [dailyMM, setDailyMM] = useState('00');
   const [dailyCoverage, setDailyCoverage] = useState('yesterday');
   const [optPicker, setOptPicker] = useState(null);   // { title, options, current, onPick }
-  const [adminAccept, setAdminAcceptVal] = useState('5');
   // Attendance in the app. `available` is whether the server has the
   // attendance bridge at all — without it the card is not rendered, so a
   // database that never installed HR looks exactly as it did before.
@@ -165,7 +163,6 @@ export default function ConfigurationScreen({ onBack, onOpen }) {
     try {
       const c = await fetchConfig();
       setIsMock(c.isMock);
-      setClientApprovalVal(String(c.client_approval_minutes));
       setQueueNudgeVal(String(c.queue_nudge_minutes));
       setStandardHoursVal(String(c.standard_workday_hours ?? 9));
       setUrgentNudgeVal(String(c.urgent_nudge_minutes));
@@ -188,7 +185,6 @@ export default function ConfigurationScreen({ onBack, onOpen }) {
       setDailyHH(String(dH));
       setDailyMM(String(Math.round((dh - dH) * 60)).padStart(2, '0'));
       setDailyCoverage(c.daily_report_coverage || 'yesterday');
-      setAdminAcceptVal(String(c.admin_accept_minutes ?? 5));
       setWaGroupJid(c.wa_group_jid || '');
       setWaGroupName(c.wa_group_name || '');
       setAttAvailable(!!c.attendance_available);
@@ -223,20 +219,8 @@ export default function ConfigurationScreen({ onBack, onOpen }) {
   }, [load]);
 
   // ── Savers ────────────────────────────────────────────────────────────────
-  const saveAdminAccept = async () => {
-    // max(0, …), NOT max(1, …): 0 is the documented kill switch that turns
-    // auto-accept off entirely, and clamping it up to 1 would silently re-enable
-    // a behaviour someone deliberately disabled. Matches kra_api.py:2556.
-    const parsed = parseInt(adminAccept, 10);
-    const v = Math.max(0, isNaN(parsed) ? 5 : parsed);
-    setAdminAcceptVal(String(v));
-    await saveGuard('adminAccept', () => setAdminAccept(v));
-  };
-  const saveClientApproval = async () => {
-    const v = Math.max(1, parseInt(clientApproval) || 5);
-    setClientApprovalVal(String(v));
-    await saveGuard('clientApproval', () => setClientApproval(v));
-  };
+  // The admin accept and client approval windows are retired (module 19.0.8.6):
+  // nothing is accepted or released automatically, so there is nothing to set.
   const saveQueueNudge = async () => {
     const v = Math.max(1, parseInt(queueNudge) || 30);
     setQueueNudgeVal(String(v));
@@ -478,35 +462,9 @@ export default function ConfigurationScreen({ onBack, onOpen }) {
           )}
 
           <Card color="#0ea5e9" iconLib="mc" icon="clock-outline" title="Timers">
-            <Text style={s.label}>Admin accept window (minutes)</Text>
-            <View style={s.inlineRow}>
-              <TextInput
-                style={[s.input, { width: 90 }]} keyboardType="number-pad"
-                value={adminAccept} onChangeText={setAdminAcceptVal}
-                onEndEditing={saveAdminAccept}
-              />
-              <Text style={s.unit}>min</Text>
-              {<SaveMark k="adminAccept" />}
-            </View>
-            <Text style={s.hint}>How long an admin has to accept a submitted task before it is
-              accepted automatically. <Text style={{ fontWeight: '800' }}>0 turns auto-accept off</Text> —
-              tasks then wait for a person.</Text>
-
-            <Text style={[s.label, { marginTop: 16 }]}>Client approval window (minutes)</Text>
-            <View style={s.inlineRow}>
-              <TextInput
-                style={[s.input, { width: 90 }]} keyboardType="number-pad"
-                value={clientApproval} onChangeText={setClientApprovalVal}
-                onEndEditing={saveClientApproval}
-              />
-              <Text style={s.unit}>min</Text>
-              {<SaveMark k="clientApproval" />}
-            </View>
-            <Text style={s.hint}>How long a client has to approve the developer assigned to their task.
-              If they don't respond in time it is approved automatically. Only for tasks the team
-              creates: a request the client raised themselves starts once an admin accepts it.</Text>
-
-            <Text style={[s.label, { marginTop: 16 }]}>Queue re-nudge gap (minutes)</Text>
+            {/* Admin accept / client approval windows retired (module 19.0.8.6):
+                approvals climb the approval chain below and wait for a person. */}
+            <Text style={s.label}>Queue re-nudge gap (minutes)</Text>
             <View style={s.inlineRow}>
               <TextInput
                 style={[s.input, { width: 90 }]} keyboardType="number-pad"
@@ -1245,7 +1203,7 @@ function ApprovalChainCard() {
         </TouchableOpacity>
       </View>
       <View style={s.cardBody}>
-        <Text style={[s.hint, { marginTop: 0 }]}>A new client request goes to step 1. If nobody there decides
+        <Text style={[s.hint, { marginTop: 0 }]}>A new client request, or a developer's own task, goes to step 1. If nobody there decides
           within its minutes, the next step is asked, and so on. After the last step it keeps waiting and
           the last step is reminded every 30 minutes. <Text style={{ fontWeight: '800' }}>Nothing is accepted
           automatically.</Text> Each person gets a private WhatsApp link on the number under their name.</Text>

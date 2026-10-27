@@ -57,6 +57,7 @@ KIND_BAND = {
     'db_live': 4,
     'meeting': 5,
     'qa': 6,
+    'self_task': 7,
 }
 BAND = 100000000
 
@@ -67,6 +68,7 @@ KINDS = [
     ('db_live', 'Database waiting to go live'),
     ('meeting', 'Meeting asked for'),
     ('qa', 'Work finished, needs checking'),
+    ('self_task', 'Developer created a task'),
 ]
 
 # What the two buttons mean, per kind, in the admin's own words. Shown on the
@@ -84,6 +86,8 @@ WORDING = {
                 'Cancel the meeting'),
     'qa': ('Passed -- send it on for sign-off',
            'Send it back to the developer'),
+    'self_task': ("Accept it into the team's work",
+                  'Refuse it -- the developer is told why'),
 }
 
 
@@ -248,6 +252,28 @@ SELECT (%s + k.id), 'qa'::varchar, 'kra.kpi'::varchar, k.id,
  WHERE k.task_state = 'partially_completed'
    AND COALESCE(k.admin_approved, FALSE) IS NOT TRUE
    AND COALESCE(k.active, TRUE) IS TRUE
+
+UNION ALL
+
+-- 7. A developer created their own task (kpi_self_create.py). It waits on the
+--    approval chain (kpi_escalation.py) and is decided here like the rest.
+--    A task already sent back is waiting on the developer, not on an admin.
+SELECT (%s + k.id), 'self_task'::varchar, 'kra.kpi'::varchar, k.id,
+       COALESCE(k.external_ref, '')::varchar,
+       k.name::varchar,
+       (SELECT p.name FROM res_users u
+          JOIN res_partner p ON p.id = u.partner_id
+         WHERE u.id = k.user_id)::varchar,
+       k.client_kra_id,
+       k.create_date,
+       (SELECT p.name FROM res_users u
+          JOIN res_partner p ON p.id = u.partner_id
+         WHERE u.id = k.requested_by_id)::varchar
+  FROM kra_kpi k
+ WHERE k.is_self_created IS TRUE
+   AND COALESCE(k.admin_accepted, FALSE) IS NOT TRUE
+   AND COALESCE(k.self_needs_resume_reason, FALSE) IS NOT TRUE
+   AND COALESCE(k.active, TRUE) IS TRUE
 """ % ((self._table,) + tuple(KIND_BAND[k] * BAND for k, _lbl in KINDS)))
 
     # ------------------------------------------------------------------
@@ -370,6 +396,9 @@ SELECT (%s + k.id), 'qa'::varchar, 'kra.kpi'::varchar, k.id,
             if self.kind == 'db_live':
                 rec.action_activate()
                 return self._done(_('%s is live.') % (self.name or ''))
+            if self.kind == 'self_task':
+                res = _self_task_route('accept_self_created', kpi_id=rec.id)
+                return self._done(res.get('message') or _('Accepted.'))
 
         return self._ask(decision)
 
@@ -624,3 +653,27 @@ class KpiApprovalDecide(models.TransientModel):
     def _do_reject_qa(self, kpi):
         kpi.reject_task(rejection_reason=self._reason_text())
         return _('Sent back to %s.') % (kpi.user_id.name or _('the developer'))
+
+    def _do_reject_self_task(self, kpi):
+        # A refusal always says why: the developer sees "Rejected: <reason>".
+        res = _self_task_route('reject_self_created', kpi_id=kpi.id,
+                               note=self._reason_text())
+        return res.get('message') or _('Refused. The developer has been told why.')
+
+
+def _self_task_route(method, **params):
+    """Accept / refuse a developer's own task.
+
+    Both live only as HTTP routes (/kra_kpi/task/accept_self_created and
+    /reject_self_created in controllers/kra_api.py), so they are run here as
+    the signed-in admin, exactly as the WhatsApp decision page does
+    (kpi_wa_admin_decide._apply). The desk is always reached over call_kw, so
+    a request is there. Returns the route's dict; raises on a refusal."""
+    from odoo.http import request
+    if not request:
+        raise UserError(_('Decide this one from the task board.'))
+    from ..controllers.kra_api import KraKpiAPI
+    res = getattr(KraKpiAPI(), method)(**params) or {}
+    if not res.get('status'):
+        raise UserError(res.get('message') or _('That could not be saved.'))
+    return res

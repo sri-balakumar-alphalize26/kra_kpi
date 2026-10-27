@@ -61,7 +61,7 @@ export default function ApprovalChainCard() {
   return (
     <div className="cardbox" id="approval-chain" style={{ scrollMarginTop: 72, gap: 10 }}>
       <h2 style={{ display: "flex", alignItems: "center" }}>Approval chain<span className="spacer" style={{ flex: 1 }} /><Button size="sm" icon="plus" onClick={add}>Add step</Button></h2>
-      <span className="mini">A new client request goes to step 1. If nobody there decides within its minutes, the next step is asked, and so on. After the last step it keeps waiting and the last step is reminded every 30 minutes. <b>Nothing is accepted automatically.</b> Each person gets a private WhatsApp link on the number under their name.</span>
+      <span className="mini">A new client request, or a task a developer creates for themselves, goes to step 1. If nobody there decides within its minutes, the next step is asked, and so on. After the last step it keeps waiting and the last step is reminded every 30 minutes. <b>Nothing is accepted automatically.</b> Each person gets a private WhatsApp link on the number under their name.</span>
       {tiers === null && <span className="mini">Loading…</span>}
       {tiers && !tiers.length && <span className="mini">No steps — every manager is asked at once.</span>}
       {anyDup && <div role="alert" style={{ ...RED, borderRadius: 8, padding: "8px 10px", color: "var(--danger)", fontSize: 13, fontWeight: 600 }}>⚠ Some people are used on more than one step (marked in red). The same person asked twice adds nothing — put someone else on the later step.</div>}

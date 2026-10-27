@@ -363,12 +363,15 @@ function ReasonDialog({ task, busy, onClose, onConfirm, title, label, text, conf
 
 function SendBackDialog({ task, busy, onClose, onConfirm }) {
   const [note, setNote] = useState("");
+  // A refusal always says why (the server refuses an empty one): the developer
+  // sees "Rejected: <reason>" on the card.
+  const ok = !!note.trim();
   return (
     <Modal open onClose={onClose} title={<Title task={task}>Send back to {task.user_name || "developer"}</Title>} width={480}
-      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="danger" busy={busy} onClick={() => onConfirm({ note: note.trim(), discard: true })}>Discard task</Button><Button kind="primary" busy={busy} onClick={() => onConfirm({ note: note.trim(), discard: false })}>Send Back</Button></>}>
+      footer={<><Button kind="ghost" onClick={onClose}>Cancel</Button><Button kind="danger" busy={busy} disabled={!ok} onClick={() => onConfirm({ note: note.trim(), discard: true })}>Discard task</Button><Button kind="primary" busy={busy} disabled={!ok} onClick={() => onConfirm({ note: note.trim(), discard: false })}>Send Back</Button></>}>
       {task.self_resume_note && <Box><b>{task.self_resume_by || "Developer"}</b> replied: <span style={{ whiteSpace: "pre-wrap" }}>{task.self_resume_note}</span></Box>}
       <div className="note" style={{ margin: 0 }}>You&apos;re about to send <b>&quot;{task.name}&quot;</b> back for revision:<ul style={{ margin: "6px 0 0", paddingLeft: 18 }}><li>The task is <b>paused</b> — the timer stops, but time logged so far is kept.</li><li>It stays in the developer&apos;s <b>Pending Review</b> lane — nothing is deleted.</li><li>The developer is notified and sees your reason on the card.</li></ul></div>
-      <Field label="Reason for sending back" hint={"Optional — leave blank and the card shows \"Please revise\"."}><span className="input ta"><textarea value={note} placeholder="e.g. Please add more detail / wrong project…" onChange={(e) => setNote(e.target.value)} autoFocus style={TA} /></span></Field>
+      <Field label="Reason for sending back" required hint="Required — the developer sees it as the reason."><span className="input ta"><textarea value={note} placeholder="e.g. Please add more detail / wrong project…" onChange={(e) => setNote(e.target.value)} autoFocus style={TA} /></span></Field>
       <p className="mini" style={{ margin: 0 }}>Discard removes the task instead.</p>
     </Modal>
   );
@@ -661,7 +664,7 @@ export function CreateTaskDialog({ open, onClose, onCreated }) {
       <Field label="Description (optional)"><span className="input ta"><textarea value={desc} onChange={(e) => setDesc(e.target.value)} style={TA} /></span></Field>
       {err && <span className="err" style={{ color: "var(--danger)", fontSize: 12.5, fontWeight: 700 }}>{err}</span>}
       {mode === "new"
-        ? <p className="mini" style={{ margin: 0 }}>This goes to your <b>Pending review</b> lane. <b>Start stays locked</b> until an admin accepts it — which happens automatically if nobody acts within the accept window. Your client is then asked to approve, and the task releases for work once they do (or automatically if they don't reply in time).</p>
+        ? <p className="mini" style={{ margin: 0 }}>It goes to your approval chain; you can start once it is approved. Your client is then asked to approve, and the task releases for work once they do.</p>
         : <p className="mini" style={{ margin: 0 }}>This goes straight to <b>Pending approvals</b> as a finished task — it still needs approving. The time counts in the KRA, employee and invoice reports on the work date, but <b>not as attendance</b> or productive time for the day.</p>}
     </Modal>
   );

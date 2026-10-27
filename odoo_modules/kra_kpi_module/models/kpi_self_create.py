@@ -23,9 +23,10 @@ class KraKpiSelfCreate(models.Model):
         """Developer self-creates a task.
 
         It lands in the separate "Pending Review" lane
-        (is_self_created=True, admin_accepted=False): assigned to the creator and
-        immediately workable (timer runs), but kept OUT of the official flow
-        (no client pre-approval) until an admin Accepts it.
+        (is_self_created=True, admin_accepted=False): assigned to the creator,
+        and kept OUT of the official flow until it is accepted. It climbs the
+        approval chain (kpi_escalation.py) like a client request; nothing is
+        accepted automatically. Then the client approves, then work starts.
         """
         user = self.env.user
         if not (user.has_group('kra_kpi_module.group_kra_developer')
@@ -120,8 +121,12 @@ class KraKpiSelfCreate(models.Model):
                         priority=priority)
         except Exception as exc:
             _logger.warning("self_task_submitted notify failed: %s", exc)
-        # Accept / send back from WhatsApp too (kpi_wa_admin_link.py). Never raises.
+        # The approval chain, step 1 (or every managing admin when there is no
+        # chain), each with a private WhatsApp link to accept or refuse
+        # (kpi_wa_admin_link.py). Nothing is accepted automatically. Never raises.
         rec._wa_ask_admins('self_task')
 
+        stage = rec.approval_stage_label or 'Waiting for approval'
         return {'status': True, 'id': rec.id, 'external_ref': rec.external_ref,
-                'message': 'Task created in your Pending Review lane.'}
+                'approval_stage_label': stage,
+                'message': 'Task created. ⏳ %s.' % stage}

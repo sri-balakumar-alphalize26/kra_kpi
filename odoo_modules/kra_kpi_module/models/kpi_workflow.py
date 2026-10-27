@@ -7,11 +7,11 @@ new client pre-approval flow described in Section 2 of the spec:
      puts the task into 'pre_approval_pending' with a reminder + release clock.
   2. record_client_pre_decision(...) — idempotent decision recorder, called
      by the public web controller and (later) the WhatsApp inbound parser.
-  3. _cron_pre_approval_timeout() — reminds the client, then AUTO-RELEASES the
-     task for work once the window elapses.  Release is not approval: see
-     _sweep_pre_approval_release.
-  4. _cron_admin_accept_timeout() — auto-accepts a task no admin triaged, so an
-     un-actioned queue cannot block a developer indefinitely.
+  3. _cron_pre_approval_timeout() — reminds the client.  The old auto-release
+     (_sweep_pre_approval_release) is retired since 19.0.8.6: the client must
+     actively approve.
+  4. _cron_admin_accept_timeout() — retired no-op since 19.0.8.6; nothing is
+     accepted automatically (the approval chain reminds instead).
   5. _log_action(...) — thin helper that writes to kpi.action.log.
 
 The notification dispatcher (`_notify`) lives in models/kpi_notify.py and is
@@ -265,10 +265,10 @@ class KpiWorkflow(models.Model):
                 'pre_approval_decided_by_partner_id': False,
                 'pre_approval_source':       False,
                 'pre_approval_feedback':     False,
-                # First nudge lands at the reminder gap; the hard release lands
-                # at the full window.  See the field comments in kpi.py.
+                # First nudge lands at the reminder gap.  No release clock any
+                # more (19.0.8.6): the client must actively approve.
                 'pre_approval_deadline_at':  now + timedelta(minutes=rec._pre_approval_reminder_gap()),
-                'pre_approval_release_at':   now + timedelta(minutes=window),
+                'pre_approval_release_at':   False,
                 'pre_approval_reminder_count': 0,
                 # A fresh request supersedes any previous release or hold.
                 'pre_approval_auto_released': False,
@@ -388,15 +388,11 @@ class KpiWorkflow(models.Model):
             # Token stays live so the client can come back; extend the TTL.
             vals['approval_token_expires'] = now + timedelta(hours=APPROVAL_TOKEN_TTL_HOURS)
             vals['approval_token_used']    = False
-            # Clarify is a question, not an answer — so RE-ARM both clocks
-            # rather than leaving them cleared above. Stopping them would let a
-            # single "what do you mean?" block the developer indefinitely, which
-            # is precisely the deadlock this release removes. The client gets a
-            # fresh full window to actually decide.
+            # Clarify is a question, not an answer — so RE-ARM the reminders
+            # rather than leaving them cleared above. The client gets a fresh
+            # run of nudges to actually decide (no release clock: 19.0.8.6).
             vals['pre_approval_deadline_at'] = now + timedelta(
                 minutes=self._pre_approval_reminder_gap())
-            vals['pre_approval_release_at'] = now + timedelta(
-                minutes=self._client_approval_minutes())
             vals['pre_approval_reminder_count'] = 0
         else:
             vals['approval_token_used']    = True
@@ -718,13 +714,11 @@ class KpiWorkflow(models.Model):
                     rec._auto_admin_accept(by_user=self.env.user)
                 except Exception as exc:
                     # A creation must never fail because the gate-skip did.
-                    # The row simply keeps its clock via the arm below.
+                    # The row simply waits for a human Accept.
                     _logger.warning("admin-created accept failed for %s: %s", rec.id, exc)
-        # ...but the admin gate is time-boxed, so start its clock now.  Without
-        # this a task nobody triages blocks its developer forever and never even
-        # reaches the client.  Rows accepted just above are skipped in here
-        # (admin_accepted is already True).
-        records._arm_admin_accept_deadline()
+        # No accept clock any more (19.0.8.6): a task nobody triages waits for a
+        # human. Client requests and a developer's own task climb the approval
+        # chain instead (kpi_escalation.py), which reminds but never accepts.
         return records
 
     def write(self, vals):
@@ -794,13 +788,11 @@ class KpiWorkflow(models.Model):
             try:
                 rec._auto_admin_accept(by_user=self.env.user)
             except Exception as exc:
-                # Fall back to the timed gate rather than losing the task: a
-                # failure here must not leave it un-accepted with no clock.
+                # The row stays un-accepted and waits for a human Accept.
                 _logger.warning("accept-on-assign failed for %s: %s", rid, exc)
-                will_arm_admin_accept.append(rid)
 
-        if will_arm_admin_accept:
-            self.browse(will_arm_admin_accept)._arm_admin_accept_deadline()
+        # will_arm_admin_accept is no longer armed (19.0.8.6): nothing is
+        # accepted automatically; the row waits for a human decision.
 
         for rid in will_request_pre_approval:
             rec = self.browse(rid)
@@ -980,9 +972,9 @@ class KpiWorkflow(models.Model):
         is free to start.
 
         The workflow is: admin accepts -> client approves -> developer works.
-        Neither gate blocks forever: an unactioned task auto-accepts after
-        res.company.admin_accept_minutes, and a silent client auto-releases it
-        after res.company.client_approval_minutes.
+        Since 19.0.8.6 neither gate opens by itself: the admin gate climbs the
+        approval chain (kpi_escalation.py) and the client must actively approve.
+        Rows auto-released before then keep pre_approval_auto_released.
 
         Auto-release grants permission to WORK, never permission to BILL.  A
         released task has pre_approval_decision empty — the client never said
@@ -1044,9 +1036,8 @@ class KpiWorkflow(models.Model):
             return None         # already underway — resuming is fine
         if not self.admin_accepted:
             return ('admin',
-                    "'%s' has not been accepted by an admin yet. It accepts "
-                    "automatically if nobody acts; you can start once it does."
-                    % ref)
+                    "'%s' is waiting for approval. You can start once it is "
+                    "approved." % ref)
         # Order matters: an explicit client "no" must beat an earlier
         # auto-release.  A client who objects after the window closed still
         # stops a task that has not actually started.
@@ -1061,8 +1052,8 @@ class KpiWorkflow(models.Model):
         if self.pre_approval_auto_released:
             return None         # window elapsed — released for work, NOT approved
         return ('client',
-                "'%s' is waiting for the client to approve who works on it. It "
-                "releases automatically if they don't reply." % ref)
+                "'%s' is waiting for the client to approve who works on it. You "
+                "can start once they approve." % ref)
 
     def _assert_startable(self):
         """Raise unless the task may start/resume.  Thin wrapper over _start_block."""
@@ -1933,39 +1924,14 @@ class KpiWorkflow(models.Model):
         )
 
     def _arm_admin_accept_deadline(self, force=False):
-        """Start the admin acceptance clock on rows that need one.
+        """Retired (19.0.8.6) — deliberately a no-op.
 
-        ONE invariant, applied from create()/write() rather than sprinkled
-        across the four create routes: a task is armed when it is un-accepted,
-        active, and has a developer.  Every controller that creates a task
-        inherits it automatically, and the dev-less client-portal rows arm
-        themselves the moment somebody is assigned.
-
-        Never restarts a clock that is already ticking (an unrelated write must
-        not buy the task another full window) unless force=True, which is what
-        the send-back reply path wants.
+        This started a clock after which _cron_admin_accept_timeout accepted the
+        task for nobody. Nothing is accepted automatically any more: a waiting
+        task climbs the approval chain (kpi_escalation.py) and the last step is
+        reminded until a person decides. Kept so a stray caller does not break.
         """
-        if self.env.context.get('kpi_no_admin_arm'):
-            return              # bulk restore/import — do not arm history
-        # create()/write() run this, so an un-upgraded schema must not make task
-        # creation itself fail — see _schema_ready.
-        if not _schema_ready(self.env.cr, 'admin_accept_deadline_at'):
-            return
-        for rec in self:
-            if rec.admin_accepted or not rec.active or not rec.user_id:
-                continue
-            if rec.admin_accept_deadline_at and not force:
-                continue
-            mins = rec._admin_accept_minutes()
-            if not mins:
-                continue        # 0 = auto-accept disabled; wait for a human
-            deadline = fields.Datetime.now() + timedelta(minutes=mins)
-            rec.sudo().write({'admin_accept_deadline_at': deadline})
-            try:
-                rec._log_action('admin_accept_armed', source='system',
-                                payload={'window_min': mins, 'deadline_at': str(deadline)})
-            except Exception:
-                pass
+        return
 
     def _auto_admin_accept(self, by_user=None):
         """Accept a task, categorise it, and hand it to the client.
@@ -2060,58 +2026,27 @@ class KpiWorkflow(models.Model):
 
     @api.model
     def _cron_admin_accept_timeout(self):
-        """Accept tasks whose admin window elapsed.
+        """Retired (19.0.8.6) — deliberately a no-op.
 
-        Deliberately a SEPARATE cron record from _cron_pre_approval_timeout:
-        each ir.cron runs in its own transaction, so one poisoned row here
-        cannot roll back the client-release sweep (or vice versa), and ops can
-        disable either gate on its own during a rollout.
+        This accepted tasks whose admin window elapsed. Nothing is accepted
+        automatically any more: undecided tasks climb the approval chain
+        (kpi_escalation._cron_escalate_tiers), which reminds but never accepts.
+
+        Kept as a no-op (rather than deleted) because the cron record may still
+        exist in a deployed DB and would error on a missing method. The cron in
+        data/kpi_admin_accept_cron.xml is also deactivated.
         """
-        if not _schema_ready(self.env.cr, 'admin_accept_deadline_at',
-                             'admin_accepted_auto'):
-            _logger.warning(
-                "kra_kpi: admin-accept cron skipped — 19.0.2.4 columns are not in "
-                "the database yet. Upgrade the module (-u kra_kpi_module).")
-            return 0
-        now = fields.Datetime.now()
-        due = self.sudo().search([
-            ('admin_accepted', '=', False),
-            # Load-bearing: reject_self_created ARCHIVES a discarded task while
-            # leaving admin_accepted False.  Without this filter every discarded
-            # task would auto-accept, take a fresh REQ-### ref and ping a client.
-            ('active', '=', True),
-            ('user_id', '!=', False),
-            ('admin_accept_deadline_at', '!=', False),
-            ('admin_accept_deadline_at', '<=', now),
-            ('task_state', 'not in', ('completed', 'awaiting_client')),
-        ], order='admin_accept_deadline_at asc', limit=ADMIN_ACCEPT_BATCH_MAX)
-        accepted = 0
-        for rec in due:
-            # Same lock discipline as the release sweep: an admin clicking
-            # Accept in this same second must not produce two tokens and two
-            # client notifications.
-            self.env.cr.execute(
-                'SELECT id FROM kra_kpi WHERE id = %s FOR UPDATE', (rec.id,))
-            rec.invalidate_recordset(['admin_accepted', 'admin_accept_deadline_at'])
-            if rec.admin_accepted or not rec.admin_accept_deadline_at:
-                continue        # a human got there first
-            try:
-                rec._auto_admin_accept()
-                accepted += 1
-            except Exception as exc:
-                _logger.warning("auto admin-accept failed for task %s: %s", rec.id, exc)
-        return accepted
+        return 0
 
     # ------------------------------------------------------------------ #
     # Cron — client approval reminders, then auto-RELEASE                 #
     # ------------------------------------------------------------------ #
     @api.model
     def _cron_pre_approval_timeout(self):
-        """Chase the client, then stop blocking the developer.
+        """Chase the client.
 
-        Two sweeps over two independent clocks (see the field comments in
-        kpi.py): reminders on pre_approval_deadline_at, and the hard release on
-        pre_approval_release_at.
+        Reminders on pre_approval_deadline_at.  The hard release on
+        pre_approval_release_at is retired (19.0.8.6) and always reports 0.
 
         On the history here — this method once auto-APPROVED a silent client's
         task, stamping "Auto-approved (no response)", and flipped others to a
@@ -2154,8 +2089,8 @@ class KpiWorkflow(models.Model):
             # most once per gap, and PRE_APPROVAL_REMINDER_MAX times in total.
             if rec.pre_approval_reminder_count >= self.PRE_APPROVAL_REMINDER_MAX:
                 # Stop CHASING — not stop waiting.  Clearing the reminder clock
-                # drops the row from this search; pre_approval_release_at is
-                # untouched and still decides when work may start.
+                # drops the row from this search; the task still waits for the
+                # client to actually approve.
                 rec.sudo().write({'pre_approval_deadline_at': False})
                 rec._log_action(
                     'pre_approval_reminder_exhausted',
@@ -2185,82 +2120,14 @@ class KpiWorkflow(models.Model):
 
     @api.model
     def _sweep_pre_approval_release(self, now):
-        """The client stayed silent past their window → let the developer work.
+        """Retired (19.0.8.6) — deliberately a no-op.
 
-        Lands the task in 'pre_approval_approved' so every existing consumer
-        (boards, mobile app, lane maps) treats it as startable with no changes.
-        The distinction between "client approved" and "nobody answered" lives in
-        pre_approval_auto_released and the audit log, NOT in the state — a new
-        state value would read as unknown to every client of this API and make
-        the Start button vanish rather than appear.
+        This released a task for work when the client stayed silent past their
+        window. The client must now actively approve; silence keeps the task
+        waiting (the reminder sweep above still chases them).
+        Rows released before then keep pre_approval_auto_released.
         """
-        due = self.sudo().search([
-            ('task_state', '=', 'pre_approval_pending'),
-            ('active', '=', True),
-            ('user_id', '!=', False),
-            ('pre_approval_held', '=', False),
-            ('pre_approval_release_at', '!=', False),
-            ('pre_approval_release_at', '<=', now),
-        ], order='pre_approval_release_at asc', limit=AUTO_RELEASE_BATCH_MAX)
-        released = 0
-        for rec in due:
-            # Same row lock record_client_pre_decision takes.  Without it a
-            # client's Approve landing microseconds earlier could be overwritten
-            # by this write, turning a genuine consent into "no reply".
-            self.env.cr.execute(
-                'SELECT id FROM kra_kpi WHERE id = %s FOR UPDATE', (rec.id,))
-            rec.invalidate_recordset(
-                ['task_state', 'pre_approval_decision', 'pre_approval_held',
-                 'pre_approval_release_at'])
-            if (rec.task_state != 'pre_approval_pending'
-                    or rec.pre_approval_decision
-                    or rec.pre_approval_held):
-                rec._log_action(
-                    'pre_approval_release_skipped', source='cron',
-                    payload={'state': rec.task_state,
-                             'decision': rec.pre_approval_decision or '',
-                             'held': rec.pre_approval_held})
-                continue
-
-            window = rec._client_approval_minutes()
-            # DELIBERATELY NOT WRITTEN, now or ever, by this method:
-            #   pre_approval_decision, pre_approval_decided_at,
-            #   pre_approval_decided_by_name, pre_approval_decided_by_partner_id,
-            #   pre_approval_source, approval_token_used, client_final_approved.
-            # Writing any of them would record the client's silence as their
-            # consent.  That is the defect 19.0.2.3 exists to undo; the string
-            # 'Auto-approved (no response)' must never reappear in this module.
-            rec.sudo().write({
-                'task_state':                'pre_approval_approved',
-                'pre_approval_auto_released': True,
-                'pre_approval_auto_released_at': now,
-                'pre_approval_auto_released_after_min': window,
-                'pre_approval_deadline_at':  False,
-                'pre_approval_release_at':   False,
-                # Keep the client's door open: they may still object, and the
-                # token page is one of the ways they do it.
-                'approval_token_expires':    now + timedelta(hours=APPROVAL_TOKEN_TTL_HOURS),
-            })
-            rec._log_action(
-                'pre_approval_auto_released', source='cron',
-                payload={'window_min': window,
-                         'reminders_sent': rec.pre_approval_reminder_count})
-            released += 1
-            # Two audiences, two messages: the team is told "you may start, and
-            # this is NOT approved"; the client is told "we stopped waiting, you
-            # can still object".  One body cannot say both honestly.
-            for event in ('pre_approval_auto_released', 'pre_approval_window_closed'):
-                try:
-                    rec._notify(event, window_minutes=window)
-                except Exception as exc:
-                    try:
-                        rec._log_action(
-                            'notification_failed',
-                            payload={'event': event, 'error': str(exc)},
-                            success=False)
-                    except Exception:
-                        pass
-        return released
+        return 0
 
     # ------------------------------------------------------------------ #
     # Cron — RETIRED: 30-min sequential client escalation                 #
@@ -2386,7 +2253,7 @@ class KpiWorkflow(models.Model):
         now = fields.Datetime.now()
         self.sudo().write({
             'pre_approval_deadline_at': now + timedelta(minutes=self._pre_approval_reminder_gap()),
-            'pre_approval_release_at':  now + timedelta(minutes=self._client_approval_minutes()),
+            'pre_approval_release_at':  False,
             'pre_approval_reminder_count': 0,
             'pre_approval_held': False,
         })

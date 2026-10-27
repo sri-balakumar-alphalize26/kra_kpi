@@ -390,6 +390,8 @@ class KpiWaAdminDecide(http.Controller):
                 res = kra.accept_self_created(kpi_id=k.id, doc_type=post.get('doc_type') or 'requirement',
                                               priority=post.get('priority') or 'regular')
                 return bool(res.get('status')), res.get('message') or 'accepted.', 'accepted'
+            if not note:
+                return False, 'Say why — the developer sees it.', ''
             res = kra.reject_self_created(kpi_id=k.id, note=note, discard=post.get('discard') == '1')
             return bool(res.get('status')), res.get('message') or 'sent back.', \
                 'discarded' if post.get('discard') == '1' else 'sent back'

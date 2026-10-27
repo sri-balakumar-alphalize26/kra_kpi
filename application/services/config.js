@@ -15,8 +15,6 @@ export async function fetchConfig() {
     log.info('fetchConfig — no server, mock');
     return {
       isMock: true,
-      admin_accept_minutes: 5,
-      client_approval_minutes: 5,
       queue_nudge_minutes: 30,
       urgent_nudge_minutes: 5,
       break_alert_minutes: 15,
@@ -52,10 +50,6 @@ export async function fetchConfig() {
   const devs = await jsonRpc(serverUrl, '/kpi_multitask/list', {});
   return {
     isMock: false,
-    // `?? 5`, never `|| 5`: 0 is a real setting here — it turns auto-accept off
-    // — and `||` would silently promote it back to 5.
-    admin_accept_minutes: cfg?.admin_accept_minutes ?? 5,
-    client_approval_minutes: cfg?.client_approval_minutes ?? 5,
     queue_nudge_minutes: cfg?.queue_nudge_minutes ?? 30,
     urgent_nudge_minutes: cfg?.urgent_nudge_minutes ?? 5,
     // Break / lunch / meeting over-run reminders. `??` not `||` -- 0 means the
@@ -98,21 +92,8 @@ export async function setAttendanceInApp(enabled) {
   return jsonRpc(serverUrl, '/kpi_config/set_attendance_in_app', { enabled: !!enabled });
 }
 
-// Minutes an admin has to accept a submitted task before it auto-accepts.
-// 0 is the documented kill switch (auto-accept off), so callers clamp with
-// max(0, …) rather than max(1, …) — matching kra_api.py:2556.
-export async function setAdminAccept(minutes) {
-  const { serverUrl } = await getConnection();
-  if (!serverUrl) return { status: true, minutes };
-  return jsonRpc(serverUrl, '/kpi_config/set_admin_accept', { minutes });
-}
-
-// Minutes a client has to approve the assigned developer before auto-approve.
-export async function setClientApproval(minutes) {
-  const { serverUrl } = await getConnection();
-  if (!serverUrl) return { status: true };
-  return jsonRpc(serverUrl, '/kpi_config/set_client_approval', { minutes });
-}
+// setAdminAccept / setClientApproval retired (module 19.0.8.6): nothing is
+// accepted or released automatically, so those windows are no longer set.
 
 // Minutes between admin re-nudges for an unread queued client task.
 export async function setQueueNudge(minutes) {

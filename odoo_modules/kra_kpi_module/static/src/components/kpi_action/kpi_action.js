@@ -3148,11 +3148,12 @@ export class KpiAction extends Component {
                                                             </span>
                                                         </div>
                                                     </t>
-                                                    <t t-if="task.admin_accepted_auto">
+                                                    <!-- Where the approval stands (approval chain / client), in
+                                                         place of the retired auto-accept countdown. -->
+                                                    <t t-if="task.approval_stage_label">
                                                         <div class="mt-1">
-                                                            <span class="badge bg-light text-dark border"
-                                                                  title="No admin actioned this within the accept window, so it was accepted automatically. You can still re-categorise or reject it.">
-                                                                <i class="fa fa-clock-o me-1"/>Auto-accepted
+                                                            <span class="badge bg-light text-dark border text-wrap text-start">
+                                                                <i class="fa fa-hourglass-half me-1"/><t t-esc="task.approval_stage_label"/>
                                                             </span>
                                                         </div>
                                                     </t>
@@ -8190,15 +8191,13 @@ export class KpiAction extends Component {
         if (task.start_block_reason === "multitask") {
             return "Pause your running task first";
         }
+        // Nothing is accepted or released automatically any more (19.0.8.6):
+        // say where the approval stands instead of counting down.
         if (task.start_block_reason === "admin") {
-            return task.admin_accept_deadline_at
-                ? `Waiting on admin — accepts automatically ${this._fmtWhen(task.admin_accept_deadline_at)}`
-                : "Waiting for an admin to accept this task";
+            return task.approval_stage_label || "Waiting for approval";
         }
         if (task.pre_approval_held) return "Client put approval on hold";
-        return task.pre_approval_release_at
-            ? `Waiting on client — releases ${this._fmtWhen(task.pre_approval_release_at)}`
-            : "Waiting for the client to approve";
+        return task.approval_stage_label || "Waiting for client approval";
     }
 
     /** "at 14:35" for a server UTC timestamp, rendered in the browser's zone. */
@@ -8339,11 +8338,9 @@ export class KpiAction extends Component {
                       <textarea id="ntDesc" class="form-control" rows="3"></textarea>
                     </div>
                     <div class="alert alert-info small mb-0">
-                      This goes to your <b>Pending Review</b> lane. <b>Start stays locked</b>
-                      until an admin accepts it — which happens automatically if nobody acts
-                      within the accept window. Your client is then asked to approve you, and
-                      the task releases for work once they do (or automatically if they don't
-                      reply in time). The card shows what it is waiting on.
+                      It goes to your approval chain; you can start once it is approved.
+                      Your client is then asked to approve you, and the task releases for
+                      work once they do. The card shows what it is waiting on.
                     </div>
                   </div>
                   <div class="modal-footer">
@@ -8748,7 +8745,7 @@ export class KpiAction extends Component {
                     <label class="form-label fw-bold">Reason for sending back</label>
                     <textarea id="rjReason" class="form-control" rows="3"
                               placeholder="e.g. Please add more detail / wrong project…"></textarea>
-                    <small class="text-muted">Optional — leave blank and the card shows "Please revise".</small>
+                    <small class="text-muted">Required — the developer sees it as the reason.</small>
                   </div>
                   <div class="modal-footer">
                     <button class="btn btn-secondary" id="cancelModalBtn">Cancel</button>

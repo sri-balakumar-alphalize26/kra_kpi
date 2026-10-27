@@ -198,7 +198,7 @@ function RequestSheet({ k, pre, canSign, myName, onClose, onDone, flags }) {
         {pre && mode === "view" && (
           <div className="cardbox" style={{ background: "var(--lz-review-bg)", borderColor: "var(--tint-violet-border)", gap: 8 }}>
             <b style={{ color: "var(--tint-violet-text)" }}>{pre.auto_released ? "Work started without your reply — you can still object" : "Approve the estimate?"}</b>
-            <span className="mini">{pre.held ? "On hold — the team will not start" : pre.auto_releases && pre.deadline_at ? `Starts automatically after ${pre.deadline_at} (server time)` : ""}</span>
+            <span className="mini">{pre.held ? "On hold — the team will not start" : pre.auto_released ? "" : "Waiting for your approval — work starts only after you approve."}</span>
             <div className="row" style={{ flexWrap: "wrap" }}>
               {!pre.auto_released && <Button kind="ok" busy={busy} onClick={() => run(() => P.decidePreApproval(k.id, "approve"), "Approved — work can start.")}>Approve</Button>}
               <Button kind="ghost" onClick={() => setMode("pre_reject")}>Not like this</Button>

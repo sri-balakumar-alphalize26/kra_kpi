@@ -109,6 +109,8 @@
                         domain="[('kind', '=', 'meeting')]"/>
                 <filter name="f_qa" string="Finished work to check"
                         domain="[('kind', '=', 'qa')]"/>
+                <filter name="f_self_task" string="Developer created a task"
+                        domain="[('kind', '=', 'self_task')]"/>
                 <separator/>
                 <!-- From the client's side this is the number that matters:
                      how long they have been waiting for an answer.
@@ -206,16 +208,16 @@
                          Both are told to the client, so both need wording. -->
                     <field name="reason_id"
                            invisible="decision != 'reject' or
-                                      kind in ('db_live', 'qa')"/>
+                                      kind in ('db_live', 'qa', 'self_task')"/>
                     <field name="note"
                            placeholder="The client reads this. Write it for them."
                            invisible="decision == 'approve' and
                                       kind != 'disconnect'"
-                           required="kind in ('db_live', 'qa', 'disconnect')
+                           required="kind in ('db_live', 'qa', 'disconnect', 'self_task')
                                      and (decision == 'reject' or
                                           kind == 'disconnect')"/>
                     <field name="tell_client"
-                           invisible="kind == 'db_live' or
+                           invisible="kind in ('db_live', 'self_task') or
                                       (decision == 'approve' and
                                        kind not in ('disconnect',))"/>
                 </group>

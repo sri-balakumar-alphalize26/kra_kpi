@@ -1760,7 +1760,9 @@ class KpiWaStaffTask(models.AbstractModel):
             rec._snapshot_before_start()
             rec.write({'self_resume_note': reason, 'self_resume_by': user.name,
                        'self_needs_resume_reason': False})
-            rec._arm_admin_accept_deadline(force=True)
+            # Waiting on an approver again: the approval chain, from step 1.
+            if rec.is_self_created and not rec.admin_accepted:
+                rec._wa_ask_admins('self_task')
             rec.resume_task()
         except Exception as exc:
             state._reset()

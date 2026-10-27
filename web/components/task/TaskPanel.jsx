@@ -144,7 +144,8 @@ export default function TaskPanel({ id, onClose }) {
                 {t.decline_count > 0 && <Lozenge tone="danger">Declined {t.decline_count}×</Lozenge>}
                 {late && <Lozenge tone="danger">Deadline passed</Lozenge>}
                 {t.pre_approval_auto_released && !t.pre_approval_decision && <Lozenge tone="neutral" style={{ textTransform: "none" }} title="The client did not reply within the approval window, so work was released. This is not their approval — sign-off is still required before billing.">Released — no client reply</Lozenge>}
-                {t.admin_accepted_auto && <Lozenge tone="neutral" style={{ textTransform: "none" }} title="No admin actioned this within the accept window, so it was accepted automatically.">Auto-accepted</Lozenge>}
+                {/* Where the approval stands, in place of the old auto-accept countdown. */}
+                {t.approval_stage_label && <Lozenge tone={t.approval_stage_label.startsWith("Rejected") ? "danger" : "review"} title={t.approval_stage_label} style={{ height: "auto", minHeight: 24, padding: "2px 8px", textTransform: "none", overflowWrap: "anywhere" }}>{t.approval_stage_label}</Lozenge>}
               </div>
               {t.reverted_from && (
                 <div className="callout" style={{ background: "var(--lz-paused-bg)", borderColor: "var(--pri-important)", color: "var(--lz-paused)", alignItems: "flex-start" }}>

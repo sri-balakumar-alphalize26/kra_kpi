@@ -95,7 +95,10 @@ class KpiWaAdminLink(models.Model):
             db = self._db()
             return bool(db) and db.disconnect_state == 'requested'
         if self.kind == 'self_task':
-            return bool(k.is_self_created) and not k.admin_accepted
+            # Published from the start, so `published` says nothing here. Sent
+            # back to the developer, it waits on them, not on this link.
+            return (bool(k.is_self_created) and not k.admin_accepted
+                    and not k.self_needs_resume_reason)
         if self.kind == 'qa':
             return k.task_state == 'partially_completed' and not k.admin_approved
         return False
@@ -136,6 +139,10 @@ class KraKpiAdminWa(models.Model):
     def _wa_admin_kind(self):
         """Which decision a fresh client ticket needs."""
         self.ensure_one()
+        # A developer's own task, still waiting: the approval chain re-asks it
+        # with this (kpi_escalation._cron_escalate_tiers).
+        if self.is_self_created and not self.admin_accepted:
+            return 'self_task'
         cat = getattr(self, 'request_category', 'standard')
         return {'new_database': 'new_database', 'db_disconnect': 'disconnect'}.get(cat, 'new_request')
 
@@ -159,8 +166,9 @@ class KraKpiAdminWa(models.Model):
         sent = 0
         for rec in self.sudo():
             k = kind or rec._wa_admin_kind()
-            # New client requests climb the approval chain when one is set up
-            # (kpi_escalation.py); it sends the links itself, tier by tier.
+            # New client requests and a developer's own task climb the approval
+            # chain when one is set up (kpi_escalation.py); it sends the links
+            # itself, tier by tier. No chain: every managing admin at once.
             try:
                 if rec._esc_start(k) is not None:
                     sent += 1

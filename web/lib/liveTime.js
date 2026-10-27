@@ -57,12 +57,12 @@ export function gateLabel(task) {
   if (task.start_block_reason === "workday") return "Start your workday to work on tasks";
   if (task.start_block_reason === "workday_paused") return "Resume your workday to work on tasks";
   if (task.start_block_reason === "multitask") return "Pause your running task first";
-  if (task.start_block_reason === "admin") {
-    return task.admin_accept_deadline_at ? `Waiting on admin — accepts automatically ${fmtWhen(task.admin_accept_deadline_at)}` : "Waiting for an admin to accept this task";
-  }
-  if (task.start_block_reason === "client" || (!task.start_block_reason && (task.pre_approval_held || task.pre_approval_release_at))) {
+  /* Nothing is accepted or released automatically (module 19.0.8.6): say where
+     the approval stands (approval_stage_label), never a countdown. */
+  if (task.start_block_reason === "admin") return task.approval_stage_label || "Waiting for approval";
+  if (task.start_block_reason === "client" || (!task.start_block_reason && task.pre_approval_held)) {
     if (task.pre_approval_held) return "Client put approval on hold";
-    return task.pre_approval_release_at ? `Waiting on client — releases ${fmtWhen(task.pre_approval_release_at)}` : "Waiting for the client to approve";
+    return task.approval_stage_label || "Waiting for client approval";
   }
   /* Any other (or newer) reason: the server's own sentence (_gate_keys start_block_message). */
   return task.start_block_message || "This task can't be started right now";

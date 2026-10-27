@@ -240,9 +240,8 @@ _APP_TEMPLATES = {
         "📌 {title}\n"
         "🏷 Project: {project}\n\n"
         "Open My Tasks to Approve or Reject.\n"
-        "If we don't hear from you within {window_minutes} min the team may "
-        "start work — that is not an approval, and nothing is billed until you "
-        "sign off at the end. You can still object at any time."
+        "Work starts only after you approve, and nothing is billed until you "
+        "sign off at the end."
     ),
     'pre_approval_decided': (
         "{decision_emoji} Client decision: {decision_caps}\n"
@@ -746,8 +745,8 @@ _TEMPLATES = {
         "💬 Clarify  →  {tap_clarify}\n\n"
         "Or type it manually: 1-{token_short} / 2-{token_short} / 3-{token_short} / 4-{token_short}\n"
         "Or tap to review on web → {url}\n"
-        "(No reply in {window_minutes} min and the team may start — that is not "
-        "an approval, and nothing is billed until you sign off.)"
+        "(Work starts only after you approve, and nothing is billed until you "
+        "sign off.)"
     ),
     # Sent to client when developer presses Start on a pre_approval_partial task.
     # Token is still live (the cron only changed task_state, not the token), so
