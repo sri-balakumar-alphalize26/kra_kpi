@@ -1821,20 +1821,27 @@ class KpiWaStaffTask(models.AbstractModel):
         others = self._running_tasks(user) - task
         return (_(' (still running: %s)') % ', '.join(self._ref(t) for t in others)) if others else ''
 
-    def _switch_from_begin(self, message, state, user, task, ids=None, query=''):
+    def _switch_from_begin(self, message, state, user, task, ids=None, query='', page=0):
         """From the RUNNING task: pick the task to move to (the web's Switch to…).
-        Ends with 🔍 Search: type part of a ref or name to narrow the list."""
+
+        The card message shows each task with its KRA; the poll under it is
+        paged like every long list (➡️ Next / ⬅️ Previous), then 🔍 Search and
+        ↩️ Back. It used to offer up to 9 tasks + Search + Back = 11 rows, and
+        WhatsApp's 10-option limit silently dropped ↩️ Back."""
         targets = self.env['kra.kpi'].sudo().browse(ids).exists() if ids is not None \
             else _switch_targets(task, user)
         if not targets and not query:
             return self._back_to_task(message, state, task, _('You have no other task to switch to.'))
-        d = {'at': 'switch_pick', 'ids': targets.ids, 'search': True}
-        head = _('🔀 Switch from %s to which task? %s pauses ("Moved to another task") and the '
-                 'one you pick starts.') % (self._ref(task), self._ref(task))
+        chunk, page, pages, nav = self._task_chunk(targets, page)
+        d = {'at': 'switch_pick', 'all': targets.ids, 'ids': chunk.ids, 'page': page,
+             'query': query or '', 'search': True}
+        head = _('🔀 Switch from %(a)s — %(a)s pauses ("Moved to another task") and the one you '
+                 'pick starts.') % {'a': self._ref(task)}
         if query:
-            head = _('🔍 "%(q)s" — %(n)d found. %(head)s') % {'q': query, 'n': len(targets), 'head': head}
-        return self._fask(message, state, d, head,
-                          [self._task_line(t, True) for t in targets] + [self.SEARCH, BACK])
+            head = _('🔍 "%(q)s" — %(n)d found.\n%(head)s') % {'q': query, 'n': len(targets), 'head': head}
+        self._text(message, self._task_cards(head, chunk, page, pages))
+        return self._fask(message, state, d, _('🔀 Switch to which task?'),
+                          [self._task_opt(t, i + 1) for i, t in enumerate(chunk)] + nav + [self.SEARCH, BACK])
 
     def _switch_search_ids(self, user, task, query):
         """Tasks this person could switch to that match the typed text: the
@@ -1843,7 +1850,7 @@ class KpiWaStaffTask(models.AbstractModel):
             ('user_id', '=', user.id), ('active', '=', True), ('id', '!=', task.id),
             ('task_state', 'not in', ('in_progress', 'partially_completed', 'awaiting_client', 'completed')),
         ]).ids)
-        return [i for i in self._mt_search_ids(user, query) if i in allowed][:9]
+        return [i for i in self._mt_search_ids(user, query) if i in allowed]
 
     def _fl_switch_search(self, message, state, user, d, task, tapped, low, body):
         q = (body or '').strip()
@@ -1860,12 +1867,19 @@ class KpiWaStaffTask(models.AbstractModel):
                 return self._fl_switch_search(message, state, user, d, task, tapped, low, body)
             return False
         ids = d.get('ids') or []
-        if d.get('search') and i == len(ids):               # 🔍 Search
-            self._fsave(state, {'at': 'switch_search'})
-            self._text(message, _('🔍 Type part of the task number or name to switch to — e.g. REQ-014, '
-                                  'req14, or a word from the name. (Type cancel to stop.)'))
-            return True
+        label = (d.get('opts') or [''])[i] if i < len(d.get('opts') or []) else ''
         if i >= len(ids):
+            if label.startswith(('➡️', '⬅️')):            # another page of the same list
+                step = 1 if label.startswith('➡️') else -1
+                return self._switch_from_begin(message, state, user, task, ids=d.get('all') or [],
+                                               query=d.get('query') or '', page=(d.get('page') or 0) + step)
+            if label == self.SEARCH:
+                self._fsave(state, {'at': 'switch_search'})
+                self._text(message, _('🔍 Type part of the task number or name to switch to — e.g. REQ-014, '
+                                      'req14, or a word from the name. (Type cancel to stop.)'))
+                return True
+            if d.get('query'):                              # Back from results → the whole list
+                return self._switch_from_begin(message, state, user, task)
             return self._back_to_task(message, state, task)
         target = self.env['kra.kpi'].sudo().browse(ids[i]).exists()
         if not target:
@@ -2813,6 +2827,11 @@ class KpiWaStaffTask(models.AbstractModel):
             }.get(code, _("Please say what you're pausing for (short)."))
             self._text(message, prompt + _(' (Type cancel to stop.)'))
             return True
+        # 🔀 Moved to another task: that is a switch, so ask WHICH task and do
+        # it in one step (kra.kpi.switch_to_task) -- not pause now and leave the
+        # person to find and start the next task themselves.
+        if code == 'priority_task' and not all_ and task and _switch_targets(task, user):
+            return self._switch_from_begin(message, state, user, task)
         # Break / Lunch / Moved to another task / Day End: the label is the reason.
         if all_:
             return self._pause_all_apply(message, state, user, code, PAUSE_STORED[code], [])

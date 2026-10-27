@@ -1081,6 +1081,15 @@ class KpiWorkflow(models.Model):
         for rec in self:
             if not rec.user_id or rec.user_id.kpi_allow_multitask:
                 continue
+            # Two starts at once for the same person (a double tap, or the web
+            # and WhatsApp together) both passed the search below and left two
+            # tasks running. A no-op UPDATE on the person's row serialises them:
+            # the second waits, then fails to serialise (Odoo runs in REPEATABLE
+            # READ) and Odoo retries it -- now seeing the first task running.
+            # SELECT ... FOR UPDATE would wait but not re-check: a lock alone is
+            # not an update, so the stale snapshot would still pass.
+            self.env.cr.execute('UPDATE res_users SET write_date = write_date WHERE id = %s',
+                                [rec.user_id.id])
             other = self.sudo().search([
                 ('user_id', '=', rec.user_id.id),
                 ('id', '!=', rec.id),

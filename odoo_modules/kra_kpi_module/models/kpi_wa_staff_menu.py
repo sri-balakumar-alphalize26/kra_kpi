@@ -181,7 +181,7 @@ def _switch_targets(task, user):
     return task.env['kra.kpi'].sudo().search([
         ('user_id', '=', user.id), ('active', '=', True), ('id', '!=', task.id),
         ('task_state', 'not in', ('in_progress', 'partially_completed', 'awaiting_client', 'completed')),
-    ], order='write_date desc', limit=7)
+    ], order='write_date desc')
 ACT_UNDO = ('undo', '↩️ Undo start')
 
 
