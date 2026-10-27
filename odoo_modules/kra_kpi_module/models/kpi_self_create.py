@@ -11,6 +11,7 @@ import logging
 from odoo import api, models
 
 from .kpi import clean_deliverable
+from .kpi_wa_activity import WA_CREATED
 
 _logger = logging.getLogger(__name__)
 
@@ -125,6 +126,9 @@ class KraKpiSelfCreate(models.Model):
         # chain), each with a private WhatsApp link to accept or refuse
         # (kpi_wa_admin_link.py). Nothing is accepted automatically. Never raises.
         rec._wa_ask_admins('self_task')
+        # Web / app: the group hears it like the WhatsApp form's "is created".
+        rec._wa_say_in_group(WA_CREATED % {'who': user.name or '', 'ref': rec.external_ref or '',
+                                           'name': rec.name or ''}, user=user)
 
         stage = rec.approval_stage_label or 'Waiting for approval'
         return {'status': True, 'id': rec.id, 'external_ref': rec.external_ref,

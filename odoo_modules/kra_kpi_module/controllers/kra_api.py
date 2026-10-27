@@ -535,7 +535,7 @@ class KraKpiAPI(http.Controller):
         if refused:
             return refused
         try:
-            rec.start_task()
+            rec.with_context(kpi_action_source=self._action_source(params)).start_task()
         except (ValidationError, UserError) as exc:
             block = rec._start_block()
             return {'status': False,
@@ -575,6 +575,19 @@ class KraKpiAPI(http.Controller):
             return {'status': False,
                     'message': exc.args[0] if exc.args else 'Cannot undo this start.'}
 
+    def _action_source(self, params):
+        """Which door a task action came through, for the WhatsApp group line
+        (kra.kpi._wa_say_in_group): 'app' from the phone, else 'web'.
+
+        The app's fetch goes out as okhttp; the portal goes through the Next.js
+        proxy and the Odoo board through the browser, both 'web'. A caller may
+        also say so itself with `source`. The bot never calls these routes."""
+        src = params.get('source')
+        if src in ('web', 'app'):
+            return src
+        ua = (request.httprequest.headers.get('User-Agent') or '').lower()
+        return 'app' if 'okhttp' in ua else 'web'
+
     def _clean_meeting_ids(self, reason_code, raw):
         """Validate meeting participants for a pause. Shared by /task/pause and
         /task/pause_all so the two cannot disagree about what is acceptable.
@@ -608,7 +621,8 @@ class KraKpiAPI(http.Controller):
         meeting_with_ids = self._clean_meeting_ids(reason_code, params.get('meeting_with_ids'))
         if meeting_with_ids is False:
             return {'status': False, 'message': 'Invalid meeting participants.'}
-        return request.env['kra.kpi'].sudo().with_user(request.env.user).pause_all_running(
+        return request.env['kra.kpi'].sudo().with_user(request.env.user).with_context(
+            kpi_action_source=self._action_source(params)).pause_all_running(
             reason=(params.get('reason') or '').strip()[:NOTE_MAX],
             reason_code=reason_code,
             meeting_with_ids=meeting_with_ids)
@@ -654,7 +668,7 @@ class KraKpiAPI(http.Controller):
             # from_kpi_id = the task being handed over. Sent by the per-card
             # Switch button so that, under multitask, the OTHER running task
             # carries on untouched. Absent → every running task pauses.
-            return rec.switch_to_task(
+            return rec.with_context(kpi_action_source=self._action_source(params)).switch_to_task(
                 from_kpi_id=params.get('from_kpi_id') or None,
                 note=(params.get('note') or '').strip())
         except (ValidationError, UserError) as exc:
@@ -690,7 +704,8 @@ class KraKpiAPI(http.Controller):
         refused = self._task_actor_or_refuse(rec)
         if refused:
             return refused
-        rec.pause_task(reason, reason_code=reason_code, meeting_with_ids=meeting_with_ids)
+        rec.with_context(kpi_action_source=self._action_source(params)).pause_task(
+            reason, reason_code=reason_code, meeting_with_ids=meeting_with_ids)
         return {'status': True, 'message': 'Task paused', 'id': rec.id}
 
     @http.route('/kra_kpi/break/switch', type='json', auth='user', methods=['POST'], csrf=False)
@@ -862,7 +877,7 @@ class KraKpiAPI(http.Controller):
         if not rec.exists():
             return {'status': False, 'message': 'Task not found'}
         try:
-            rec.resume_task()
+            rec.with_context(kpi_action_source=self._action_source(params)).resume_task()
         except (ValidationError, UserError) as exc:
             block = rec._start_block()
             return {'status': False,
@@ -902,7 +917,8 @@ class KraKpiAPI(http.Controller):
         if rec.is_self_created and not rec.admin_accepted:
             rec._wa_ask_admins('self_task')
         try:
-            rec.resume_task()
+            rec.with_context(kpi_action_source=self._action_source(params),
+                             kpi_resume_reason=reason).resume_task()
         except (ValidationError, UserError) as exc:
             return {'status': False,
                     'message': exc.args[0] if exc.args else 'Cannot resume this task.'}
@@ -2879,7 +2895,8 @@ class KraKpiAPI(http.Controller):
         The rules and the record live in kra.kpi.self_create_task
         (models/kpi_self_create.py), shared with WhatsApp's "Create my own task".
         """
-        return request.env['kra.kpi'].self_create_task(params)
+        return request.env['kra.kpi'].with_context(
+            kpi_action_source=self._action_source(params)).self_create_task(params)
 
     @http.route('/kra_kpi/task/admin_create_done', type='json', auth='user', methods=['POST'], csrf=False)
     def admin_create_done_task(self, **params):

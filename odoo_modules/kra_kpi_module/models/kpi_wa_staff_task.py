@@ -45,6 +45,8 @@ import pytz
 
 from odoo import _, fields, models
 
+from .kpi_wa_activity import (WA_BACK_ON_CHANGED, WA_PAUSED, WA_PAUSED_ALL, WA_SWITCHED_FROM,
+                              WA_SWITCHED_TO)
 from .kpi_wa_group_intake import _strip_emoji
 from .kpi_wa_staff_menu import (ESTIMATE_LOCKED_STATES, STAFF_BY_ID, STAFF_CREATE_LABEL, STARTED_STATES,
                                 _kpi_actions_for, _switch_targets)
@@ -1770,7 +1772,7 @@ class KpiWaStaffTask(models.AbstractModel):
             self._menu_again(message, state, user)
             return True
         state._reset()
-        self._text(message, _('▶️ %(who)s is back on %(ref)s — changed: %(why)s') % {
+        self._text(message, _(WA_BACK_ON_CHANGED) % {
             'who': user.name, 'ref': self._ref(task), 'why': reason})
         return True
 
@@ -1797,7 +1799,7 @@ class KpiWaStaffTask(models.AbstractModel):
                 'ref': self._ref(task), 'why': (res or {}).get('message') or _('could not switch')})
             self._menu_again(message, state, user)
             return True
-        self._text(message, _('🔀 %(who)s switched to %(ref)s.%(still)s') % {
+        self._text(message, _(WA_SWITCHED_TO) % {
             'who': user.name, 'ref': self._ref(task), 'still': self._still_running(user, task)})
         return True
 
@@ -1876,8 +1878,7 @@ class KpiWaStaffTask(models.AbstractModel):
             return self._back_to_task(message, state, task, _('Could not switch: %s')
                                       % ((res or {}).get('message') or ''))
         state._reset()
-        self._text(message, _('🔀 %(who)s switched from %(a)s to %(b)s. %(a)s is paused (moved to another task).')
-                   % {'who': user.name, 'a': self._ref(task), 'b': self._ref(target)})
+        self._text(message, _(WA_SWITCHED_FROM) % {'who': user.name, 'a': self._ref(task), 'b': self._ref(target)})
         return True
 
     def _undo_begin(self, message, state, user, task):
@@ -2713,7 +2714,7 @@ class KpiWaStaffTask(models.AbstractModel):
         who = ''
         if meet_ids:
             who = _(' (with %s)') % ', '.join(self.env['res.users'].sudo().browse(meet_ids).mapped('name'))
-        self._text(message, _('⏸️ Paused %(refs)s — %(why)s%(who)s') % {'refs': refs, 'why': note, 'who': who})
+        self._text(message, _(WA_PAUSED_ALL) % {'refs': refs, 'why': note, 'who': who})
         return True
 
     def _fl_pause_code(self, message, state, user, d, task, tapped, low, body):
@@ -2814,7 +2815,7 @@ class KpiWaStaffTask(models.AbstractModel):
         who = ''
         if meet_ids:
             who = _(' (with %s)') % ', '.join(self.env['res.users'].sudo().browse(meet_ids).mapped('name'))
-        self._text(message, _('⏸️ %(ref)s paused — %(why)s%(who)s') % {'ref': ref, 'why': note, 'who': who})
+        self._text(message, _(WA_PAUSED) % {'ref': ref, 'why': note, 'who': who})
         return True
 
     # ================================================================== #

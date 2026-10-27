@@ -32,6 +32,8 @@ from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 from odoo.tools.sql import column_exists
 
+from .kpi_wa_activity import SWITCH_NOTE, WA_PAUSED_ALL, WA_SWITCHED_FROM, WA_SWITCHED_TO
+
 _logger = logging.getLogger(__name__)
 
 
@@ -837,9 +839,21 @@ class KpiWorkflow(models.Model):
     def _wrap_lifecycle(self, event, prev_state=None, payload=None):
         """Common helper called after a lifecycle method's super() returns."""
         try:
-            self._log_action(event, source='web', payload=payload)
+            # The real door: 'app' from the phone, 'whatsapp' from the bot (no
+            # web/app source on the context there), 'web' otherwise. Every event
+            # used to be logged as 'web', whoever triggered it.
+            src = self.env.context.get('kpi_action_source') or (
+                'whatsapp' if self.env.context.get('kpi_wa_state_id')
+                or self.env.context.get('kpi_finish_source') == 'whatsapp' else 'web')
+            self._log_action(event, source=src if src in ('web', 'whatsapp') else 'web',
+                             payload=dict(payload or {}, channel=src))
         except Exception:
             pass
+        try:
+            # Web / app only: the bot already said it in the group.
+            self._wa_group_lifecycle(event, payload)
+        except Exception as exc:
+            _logger.warning("wa group line for %s on %s failed: %s", event, self.ids, exc)
         try:
             self._notify(event, prev_state=prev_state, **(payload or {}))
         except Exception as exc:
@@ -1136,8 +1150,8 @@ class KpiWorkflow(models.Model):
                 # FIRST one opens a break (kpi.break.log keeps one active per
                 # user), so the names land once — the same reason a 20-minute
                 # lunch across two tasks is 20 minutes, not 40.
-                rec.with_user(user).pause_task(reason=reason, reason_code=code,
-                                               meeting_with_ids=meeting_with_ids)
+                rec.with_user(user).with_context(kpi_wa_quiet=True).pause_task(
+                    reason=reason, reason_code=code, meeting_with_ids=meeting_with_ids)
                 paused.append(rec.external_ref or rec.name or str(rec.id))
                 try:
                     rec._log_action('paused_bulk', source='web',
@@ -1152,6 +1166,10 @@ class KpiWorkflow(models.Model):
                 _logger.warning("pause-all failed for task %s: %s", rec.id, exc)
         if not paused:
             return {'status': False, 'message': 'Could not pause your running tasks.'}
+        # One line for the lot, as the bot's ⏸️ All tasks says it.
+        self._wa_say_in_group(WA_PAUSED_ALL % {
+            'refs': ', '.join(paused), 'who': '',
+            'why': self._wa_pause_why(reason, code)}, user=user)
         return {'status': True,
                 'paused_count': len(paused),
                 'message': 'Paused %s task%s.' % (len(paused), '' if len(paused) == 1 else 's')}
@@ -1514,21 +1532,31 @@ class KpiWorkflow(models.Model):
                    and l.kpi_id.task_state == 'in_progress']
         if from_kpi_id:
             running = [r for r in running if r.id == int(from_kpi_id)]
+        # The pause and the start below are one switch: the WhatsApp group hears
+        # ONE "🔀 switched from A to B" (said at the end), not a pause and a take.
+        quiet = self.with_context(kpi_wa_quiet=True)
         for rec in running:
-            rec.with_user(user).pause_task(
-                reason=note or 'Switched to another task',
+            rec.with_user(user).with_context(kpi_wa_quiet=True).pause_task(
+                reason=note or SWITCH_NOTE,
                 reason_code='priority_task')
 
         # 3. Start (or resume) the target. Both routes re-assert the gates.
         if self.task_state in ('paused', 'rework', 'partially_completed'):
-            self.with_user(user).resume_task()
+            quiet.with_user(user).resume_task()
         else:
-            self.with_user(user).start_task()
+            quiet.with_user(user).start_task()
 
         self._log_action('task_switched', source='web',
                          actor_user_id=user.id,
                          payload={'from': [r.id for r in running], 'to': self.id,
                                   'note': note or ''})
+        if running:
+            self._wa_say_in_group(WA_SWITCHED_FROM % {
+                'who': user.name or '', 'a': ', '.join(r._wa_ref() for r in running),
+                'b': self._wa_ref()}, user=user)
+        else:
+            self._wa_say_in_group(WA_SWITCHED_TO % {
+                'who': user.name or '', 'ref': self._wa_ref(), 'still': ''}, user=user)
         return {'status': True,
                 'message': 'Switched to %s' % (self.external_ref or self.name),
                 'from_ids': [r.id for r in running], 'to_id': self.id,

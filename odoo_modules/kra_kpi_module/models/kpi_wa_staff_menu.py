@@ -34,6 +34,8 @@ import logging
 
 from odoo import _, api, fields, models
 
+from .kpi_wa_activity import WA_BACK_ON, WA_TAKEN
+
 _logger = logging.getLogger(__name__)
 
 # The top menu. "My tasks" leads the list because picking the task first and
@@ -930,11 +932,11 @@ class KpiWaStaffRouter(models.AbstractModel):
             rec = kpi.with_user(user).sudo()
             if verb == 'start':
                 rec.start_task()
-                msg = _('▶️ %(who)s has taken %(ref)s.') % {
+                msg = _(WA_TAKEN) % {
                     'who': user.name, 'ref': ref} + self._still_running(user, kpi)
             elif verb == 'resume':
                 rec.resume_task()
-                msg = _('▶️ %(who)s is back on %(ref)s.') % {
+                msg = _(WA_BACK_ON) % {
                     'who': user.name, 'ref': ref} + self._still_running(user, kpi)
             else:
                 # The checklist the developer ticked, saved on the task for
