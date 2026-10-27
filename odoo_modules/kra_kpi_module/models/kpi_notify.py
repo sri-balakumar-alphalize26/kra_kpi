@@ -82,6 +82,8 @@ _NON_TASK_EVENTS = {
     'daily_summary', 'daily_report',
     'invoice_ready', 'invoice_paid', 'invoice_client_paid',
     'admin_nudge',
+    # An overdue invoice (tap opens the invoice, not the anchor task).
+    'invoice_overdue',
 }
 
 _PERSIST_EVENTS = {
@@ -181,6 +183,17 @@ _PERSIST_EVENTS = {
     # An admin tapped Nudge on Live Tracking. The persisted row doubles as the
     # rate limit: /kpi_owner/nudge_user refuses another within 10 minutes of it.
     'admin_nudge',
+    # ── Nudges added 19.0.8.7 (kpi_notify_more.py fires them) ──
+    'approval_your_turn',   # approver: a request reached your step of the chain
+    'approval_moved',       # dev: your own task moved up the chain (no reply)
+    'task_can_start',       # dev: every approval is in, start now
+    'client_replied',       # dev: the client wrote on your task
+    'meeting_soon',         # attendees: the task's meeting starts in ~10 min
+    'estimate_80',          # dev: 80 % of the estimate is used
+    'task_running_late',    # dev: a timer is still running in the evening
+    'review_closing',       # client + admins: sign-off review closes tomorrow
+    'database_ready',       # dev + client: the new database is live
+    'invoice_overdue',      # admins: an unpaid invoice is past due
 }
 
 # Short human labels for the in-app notification title (the body reuses the
@@ -226,6 +239,16 @@ _NOTIF_TITLES = {
     'meeting_running_long':  '👥 Meeting is running long',
     'break_budget_exceeded': '⏱ Break time adds up',
     'workday_overtime':      '🌙 Your workday is still open',
+    'approval_your_turn':    '📝 Your approval is needed',
+    'approval_moved':        '⏫ Moved up the approval chain',
+    'task_can_start':        '▶️ You can start now',
+    'client_replied':        '💬 Client replied',
+    'meeting_soon':          '📅 Meeting in 10 minutes',
+    'estimate_80':           '⏱ 80% of the estimate used',
+    'task_running_late':     '🌙 Task still running',
+    'review_closing':        '⏳ Review closes tomorrow',
+    'database_ready':        '🗄 Database ready',
+    'invoice_overdue':       '💸 Invoice overdue',
 }
 
 # App-shaped bodies for the in-app feed. The WhatsApp templates below are full of
@@ -538,6 +561,58 @@ _APP_TEMPLATES = {
         "↪ \"{name}\" is now assigned to {new_dev}.\n"
         "Contact your admin if you need details."
     ),
+
+    # ── Nudges added 19.0.8.7 — passthrough, ctx from kpi_notify_more.py ──
+    'approval_your_turn': (          # ctx: who, title, ref, project, level, tier, note_line
+        "📝 {who} needs your approval.\n"
+        "📌 {title} ({ref})\n"
+        "🏷 {project} • Level {level}: {tier}{note_line}\n"
+        "Open Approvals to accept or refuse."
+    ),
+    'approval_moved': (              # ctx: title, ref, level, tier
+        "⏫ {ref} moved up the approval chain — now with Level {level}: {tier}.\n"
+        "📌 {title}\n"
+        "Nobody at the previous step answered in time."
+    ),
+    'task_can_start': (              # ctx: title, ref, project
+        "▶️ {ref} is approved — you can start it now.\n"
+        "📌 {title}\n"
+        "🏷 {project}"
+    ),
+    'client_replied': (              # ctx: client, ref, title, snippet
+        "💬 {client} replied on {ref}:\n"
+        "“{snippet}”\n"
+        "📌 {title}"
+    ),
+    'meeting_soon': (                # ctx: meeting, at, mins, ref, title
+        "📅 {meeting} starts at {at} (in {mins} min).\n"
+        "📌 {title} ({ref})\n"
+        "Open the task to join."
+    ),
+    'estimate_80': (                 # ctx: ref, title, spent, estimate
+        "⏱ 80% of the estimate is used on {ref}.\n"
+        "📌 {title}\n"
+        "Spent {spent} of {estimate}. Ask for more time if you need it."
+    ),
+    'task_running_late': (           # ctx: ref, title, at, running
+        "🌙 {ref} is still running at {at} ({running} this session).\n"
+        "📌 {title}\n"
+        "Forgot to pause? Pause it, or end your workday."
+    ),
+    'review_closing': (              # ctx: ref, title, due
+        "⏳ The client review for {ref} closes tomorrow ({due}).\n"
+        "📌 {title}\n"
+        "Sign off or ask for changes before then."
+    ),
+    'database_ready': (              # ctx: db, url, ref, title
+        "🗄 The database is ready: {db}\n"
+        "🔗 {url}\n"
+        "📌 {title} ({ref})"
+    ),
+    'invoice_overdue': (             # ctx: number, client, days, amount
+        "💸 Invoice {number} for {client} is {days} days overdue.\n"
+        "Amount due: {amount}"
+    ),
 }
 
 
@@ -694,6 +769,21 @@ _EVENT_RECIPIENTS = {
     # resolve `developer` to the NEW assignee, who already got `reassigned`.
     # Listed explicitly so it reads as deliberate rather than an omission.
     'task_reassigned':           (),
+    # ── Nudges added 19.0.8.7 ──
+    # The people come from extra_users (the step's approvers, the task's
+    # developers, the meeting's attendees), never from the anchor task's roles —
+    # except where the role IS right: the client of the task under review, and
+    # the admins who chase invoices.
+    'approval_your_turn':        (),
+    'approval_moved':            (),
+    'task_can_start':            (),
+    'client_replied':            (),
+    'meeting_soon':              (),
+    'estimate_80':               (),
+    'task_running_late':         (),
+    'review_closing':            ('client', 'owner', 'coordinator'),
+    'database_ready':            ('client',),
+    'invoice_overdue':           ('owner', 'coordinator'),
 }
 
 
@@ -905,7 +995,13 @@ _PASSTHROUGH_EVENTS = ('daily_summary', 'daily_report',
                        'meeting_running_long', 'break_budget_exceeded',
                        'workday_overtime',
                        # About the nudged developer, anchored on any task.
-                       'admin_nudge')
+                       'admin_nudge',
+                       # 19.0.8.7 nudges: every placeholder comes from ctx
+                       # (kpi_notify_more.py), so none can name the wrong person.
+                       'approval_your_turn', 'approval_moved', 'task_can_start',
+                       'client_replied', 'meeting_soon',
+                       'estimate_80', 'task_running_late', 'review_closing',
+                       'database_ready', 'invoice_overdue')
 
 
 _DECISION_EMOJI = {

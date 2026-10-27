@@ -97,3 +97,6 @@ from . import kpi_legacy
 from . import kpi_finish
 from . import kpi_billing
 from . import kpi_client_sendback
+# LAST: wraps chat_post_client, set_provision_step, _esc_ask and kpi.meeting._open
+# to send the 19.0.8.7 app notifications.
+from . import kpi_notify_more
