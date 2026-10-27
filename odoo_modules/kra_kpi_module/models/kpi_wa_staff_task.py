@@ -2252,20 +2252,77 @@ class KpiWaStaffTask(models.AbstractModel):
             ids = self._board_lanes(user).get(lane, [])
             title = '%s — %s' % (self.LANE_LABEL.get(lane, lane), _('pick a task'))
         tasks = self.env['kra.kpi'].sudo().browse(ids).exists()
-        per = 7 if len(tasks) <= 7 else 6        # room for More · Search · Back · 🏠
-        pages = max(1, (len(tasks) + per - 1) // per)
-        page = page % pages
-        chunk = tasks[page * per:(page + 1) * per]
-        # A lane already says the state; Today and search results mix states,
-        # so those lines carry it too.
-        with_state = query is not None or lane == 'today' or (lane or '').startswith('f_')
-        opts = [self._task_line(t, with_state) for t in chunk]
-        if pages > 1:
-            opts.append('➡️ More')
-        opts += [self.SEARCH, BACK]
+        chunk, page, pages, nav = self._task_chunk(tasks, page)
+        # The cards carry the KRA, state and priority; the poll under them is
+        # just the numbered refs, short enough to read at a glance.
+        if chunk:
+            self._text(message, self._task_cards(((note + '\n\n') if note else '') + title, chunk, page, pages))
+        elif note:
+            self._text(message, note)
+        opts = [self._task_opt(t, i + 1) for i, t in enumerate(chunk)] + nav + [self.SEARCH, BACK]
         d = {'at': 'mt_task', 'phase': phase, 'lane': lane, 'page': page, 'ids': chunk.ids,
              'query': query}
-        return self._fask(message, state, d, ((note + '\n\n') if note else '') + title, opts)
+        return self._fask(message, state, d, _('👆 Pick a task') if chunk else title, opts)
+
+    # ------------------------------------------------------------------ #
+    # Task cards: a text message above the poll, 3 lines a task            #
+    # ------------------------------------------------------------------ #
+    # A poll row is one line of 100 characters, which left no room for the
+    # KRA the web card shows. So a list goes out as a card message --
+    #     1. UPT-007 [Update] Backend Working
+    #        KRA: Alpha ERP › Backend
+    #        ⏸️ Paused · IMPORTANT · 2h 10m
+    # -- with a poll under it of just "1. UPT-007 [Update] Backend Working".
+    STATE_ICON = {'in_progress': '▶️', 'paused': '⏸️', 'hold': '✋', 'rework': '🔁',
+                  'partially_completed': '👁️', 'awaiting_client': '🤝', 'completed': '🏁'}
+    TASK_PAGE = 6            # with Next · Previous · Search · Back = 10
+
+    def _task_chunk(self, tasks, page):
+        """(chunk, page, pages, nav rows): 7 when they all fit, else 6 a page
+        with ➡️ Next page / ⬅️ Previous page. Pages wrap around."""
+        per = self.TASK_PAGE + 1 if len(tasks) <= self.TASK_PAGE + 1 else self.TASK_PAGE
+        pages = max(1, (len(tasks) + per - 1) // per)
+        page = (page or 0) % pages
+        nav = []
+        if pages > 1:
+            nav.append(_('➡️ Next page (%(p)d of %(n)d)') % {'p': (page + 1) % pages + 1, 'n': pages})
+            if page:
+                nav.append(_('⬅️ Previous page'))
+        return tasks[page * per:(page + 1) * per], page, pages, nav
+
+    @staticmethod
+    def _task_kra(t):
+        """'Client › Project' as the web card shows it; one name when they are the same."""
+        kra, client = t.kra_id, t.client_kra_id
+        if client and kra and client != kra:
+            return '%s › %s' % (client.name or '', kra.name or '')
+        return (kra or client).name or ''
+
+    @staticmethod
+    def _task_opt(t, n):
+        """'3. REQ-005 Billing slow' -- the poll row under the cards."""
+        return ('%d. %s %s' % (n, t.external_ref or ('#%s' % t.id), t.name or ''))[:99]
+
+    def _task_card(self, t, n):
+        state = dict(t._fields['task_state'].selection).get(t.task_state, t.task_state)
+        icon = self.STATE_ICON.get(t.task_state, '•')
+        prio = dict(t._fields['priority'].selection or []).get(t.priority) or t.priority or 'regular'
+        spent = t.timer_total_seconds or 0
+        if t.task_state == 'in_progress' and t.timer_start_datetime:
+            spent += max(0, (fields.Datetime.now() - t.timer_start_datetime).total_seconds())
+        meta = ' · '.join(x for x in ('%s %s' % (icon, state), str(prio).upper(),
+                                      _hm(spent) if spent >= 60 else '') if x)
+        lines = ['*%d. %s* %s' % (n, self._ref(t), (t.name or '')[:80])]
+        kra = self._task_kra(t)
+        if kra:
+            lines.append('    %s %s' % (_('KRA:'), kra))
+        lines.append('    ' + meta)
+        return '\n'.join(lines)
+
+    def _task_cards(self, title, tasks, page=0, pages=1):
+        """The card message: the list's title, then each task's 3 lines."""
+        head = title + ((_(' — page %(p)d of %(n)d') % {'p': page + 1, 'n': pages}) if pages > 1 else '')
+        return '\n\n'.join([head] + [self._task_card(t, i + 1) for i, t in enumerate(tasks)])
 
     @staticmethod
     def _task_line(t, with_state=False):
@@ -2348,7 +2405,9 @@ class KpiWaStaffTask(models.AbstractModel):
         d['page'] = d['page'] % pages
         chunk = rows[d['page'] * per:(d['page'] + 1) * per]
         d['ids'] = chunk.ids
-        opts = [label(r) for r in chunk]
+        is_task = d.get('kind') == 'task'
+        # Tasks: numbered rows under a card message with the KRA (_task_cards).
+        opts = [self._task_opt(r, i + 1) if is_task else label(r) for i, r in enumerate(chunk)]
         if pages > 1:
             opts.append(_('➡️ More (page %(p)d of %(n)d)') % {'p': d['page'] + 1, 'n': pages})
         if many or d.get('query'):
@@ -2361,6 +2420,10 @@ class KpiWaStaffTask(models.AbstractModel):
             title = _('📁 Which project?') if d.get('kind') == 'project' else _('🤝 Which client?')
         if d.get('query'):
             title += '\n' + _('🔍 "%(q)s": %(n)d found') % {'q': d['query'], 'n': len(rows)}
+        if is_task and chunk:
+            self._text(message, self._task_cards(((note + '\n\n') if note else '') + title,
+                                                 chunk, d['page'], pages))
+            return self._fask(message, state, d, _('👆 Pick a task'), opts)
         return self._fask(message, state, d, ((note + '\n\n') if note else '') + title, opts)
 
     def _fl_lp(self, message, state, user, d, task, tapped, low, body):
@@ -2438,8 +2501,9 @@ class KpiWaStaffTask(models.AbstractModel):
             state._touch(staff_kpi_id=picked.id,
                          staff_action='mt:%s:%s' % (d['phase'], d['lane']))
             return self._staff_offer_actions(message, state, picked)
-        if label.startswith('➡️'):
-            return self._mt_tasks(message, state, user, d['phase'], d['lane'], d.get('page', 0) + 1,
+        if label.startswith(('➡️', '⬅️')):
+            step = 1 if label.startswith('➡️') else -1
+            return self._mt_tasks(message, state, user, d['phase'], d['lane'], d.get('page', 0) + step,
                                   query=d.get('query'))
         if label == self.SEARCH:
             self._fsave(state, {'at': 'mt_search', 'phase': d['phase'], 'lane': d['lane']})
