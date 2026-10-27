@@ -2948,46 +2948,58 @@ class KpiWaStaffTask(models.AbstractModel):
         active = live.get('active_tasks') or []
         productive = (live.get('productive_base') or 0) + max(
             [since(t.get('timer_start')) for t in active] or [0])
-        lines.append(_('Day open since %s · Presence %s · Productive %s') % (
-            clock(live.get('login_raw')), _hm(max(0, presence)), _hm(productive)))
-        if live.get('is_paused'):
-            lines.append(_('⏸️ Workday paused since %s') % clock(live.get('paused_since')))
-        if len(active) > 1:
-            lines.append(_('⚡ Multi-tasking %d tasks:') % len(active))
+        # A few short lines, most important first: what is running NOW (with
+        # its KRA), then the day in one line, then what is waiting. The whole
+        # day -- every task, break and gap up to now -- is the picture sent
+        # with it (_status_image), so it is not spelled out here as well.
+        brk, nt = live.get('active_break'), live.get('nontask')
         for t in active:
             k = Kpi.browse(t['id'])
             run = since(t.get('timer_start'))
-            lines.append(_('▶️ Working on %s — %s\n    running %s · total %s') % (
-                self._ref(k), k.name or '', _hm(run), _hm((t.get('timer_total_seconds') or 0) + run)))
-        brk = live.get('active_break')
+            lines.append(_('▶️ *Now:* %s %s') % (self._ref(k), k.name or ''))
+            kra = self._task_kra(k)
+            lines.append('    %s%s' % ((_('KRA: %s · ') % kra) if kra else '',
+                                       _('running %(run)s (total %(total)s)') % {
+                                           'run': _hm(run), 'total': _hm((t.get('timer_total_seconds') or 0) + run)}))
+        if live.get('is_paused'):
+            lines.append(_('⏸️ *Now:* workday paused since %s') % clock(live.get('paused_since')))
         if brk:
-            line = _('%s since %s (%s)') % (brk.get('type_label') or '', clock(brk.get('start_raw')),
-                                             _hm(since(brk.get('start_raw'))))
-            if brk.get('source_task_id'):
-                k = Kpi.browse(brk['source_task_id'])
-                line += _(' — paused %s') % self._ref(k)
+            line = _('☕ *Now:* %s since %s (%s)') % (brk.get('type_label') or '', clock(brk.get('start_raw')),
+                                                     _hm(since(brk.get('start_raw'))))
             if brk.get('reason_note'):
                 line += ' · %s' % brk['reason_note']
-            lines.append('☕ ' + line)
-        nt = live.get('nontask')
+            lines.append(line)
         if nt:
-            line = _('%s since %s (%s)') % (nt.get('reason_label') or '', clock(nt.get('start_raw')),
-                                             _hm(since(nt.get('start_raw'))))
-            if sess.nontask_note:
-                line += ' · %s' % sess.nontask_note
+            line = _('👥 *Now:* %s since %s (%s)') % (nt.get('reason_label') or '', clock(nt.get('start_raw')),
+                                                     _hm(since(nt.get('start_raw'))))
             if sess.nontask_meeting_with_ids:
                 line += _(' · with %s') % ', '.join(sess.nontask_meeting_with_ids.mapped('name'))
-            lines.append('👥 ' + line)
-        if not (live.get('active_tasks') or brk or nt or live.get('is_paused')):
-            lines.append(_('○ Idle — nothing running.'))
-        paused = Kpi.search([('user_id', '=', user.id), ('task_state', '=', 'paused')],
-                            order='write_date desc', limit=5)
+            lines.append(line)
+        if not (active or brk or nt or live.get('is_paused')):
+            lines.append(_('○ *Now:* idle — nothing running.'))
+        lines.append(_('🕘 Day since %(start)s · Present %(presence)s · Worked %(worked)s') % {
+            'start': clock(live.get('login_raw')), 'presence': _hm(max(0, presence)), 'worked': _hm(productive)})
+        paused = Kpi.search([('user_id', '=', user.id), ('task_state', '=', 'paused')], order='write_date desc')
         if paused:
-            lines += ['', _('Paused tasks:')]
-            for k in paused:
-                lines.append('⏸️ %s — %s%s' % (self._ref(k), k.name or '',
-                                               (' · %s' % k.paused_reason) if k.paused_reason else ''))
+            lines.append(_('⏸️ Paused: %(n)d — %(refs)s') % {
+                'n': len(paused), 'refs': ', '.join(self._ref(k) for k in paused[:5])
+                + ('…' if len(paused) > 5 else '')})
         return '\n'.join(lines)
+
+    def _status_image(self, user):
+        """Today's workday picture up to now (b64 PNG), or None when the day is
+        not open. The same drawing as the End Workday summary, made live:
+        kpi.work.session._daily_summary_payload with the running timers in."""
+        sess, is_open, _ended = self._workday(user)
+        if not (sess and is_open):
+            return None
+        try:
+            p = sess.sudo()._daily_summary_payload(full_day=True)
+            png = self.env['kpi.workday.snapshot'].sudo()._render_summary_image(p)
+            return base64.b64encode(png).decode()
+        except Exception as exc:            # the text still goes; the picture is extra
+            _logger.warning('live status image for %s failed: %s', user.login, exc)
+            return None
 
     def _staff_status(self, message, state, user):
         """📍 Current status: which day? Today is the live status; an earlier day
@@ -3019,14 +3031,15 @@ class KpiWaStaffTask(models.AbstractModel):
             return self._show_staff_menu(message, state, user)
         if dates[i] == 'today':
             return self._send_private(message, user, self._status_text(user),
-                                      _('📩 %s, your current status is in your private chat.') % (user.name or ''))
+                                      _('📩 %s, your current status is in your private chat.') % (user.name or ''),
+                                      image=self._status_image(user), caption=_('Your workday so far'))
         day = fields.Date.from_string(dates[i])
         text, image = self._day_summary(user, day)
         return self._send_private(message, user, text,
                                   _('📩 %(who)s, your summary for %(day)s is in your private chat.') % {
                                       'who': user.name or '', 'day': day.strftime('%a %d %b')}, image=image)
 
-    def _send_private(self, message, user, text, ack, image=None):
+    def _send_private(self, message, user, text, ack, image=None, caption=None):
         """Send to the person's own number; the group only hears that it went."""
         number = ''.join(ch for ch in (user.kpi_wa_number or '') if ch.isdigit())
         if not number:
@@ -3038,7 +3051,7 @@ class KpiWaStaffTask(models.AbstractModel):
             s.send_message(number, text)
             if image:
                 try:
-                    s.send_image(number, image, caption=_('End Workday summary'))
+                    s.send_image(number, image, caption=caption or _('End Workday summary'))
                 except Exception as exc:          # the text already went; the picture is extra
                     _logger.warning('private day image failed: %s', exc)
         except Exception as exc:

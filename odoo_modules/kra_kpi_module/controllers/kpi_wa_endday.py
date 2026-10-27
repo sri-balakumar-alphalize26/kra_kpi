@@ -98,7 +98,8 @@ class KpiWaEndDay(http.Controller):
             kpi_id = int(post.get('kpi_id') or 0)
         except ValueError:
             kpi_id = 0
-        text = (post.get('summary') or '').strip()
+        # A textarea: keep the user's line breaks (browsers send \r\n), trim only the ends.
+        text = (post.get('summary') or '').replace('\r\n', '\n').strip()
         if kpi_id not in {m['kpi_id'] for m in self._missing(user)}:
             return self._back(token, err='That task does not need a summary.')
         if not text:

@@ -5458,9 +5458,9 @@ export class KpiAction extends Component {
                             ${(m.name || '').replace(/</g,'&lt;')}
                         </div>
                         <div class="input-group input-group-sm mt-1">
-                            <input type="text" class="form-control" data-mp-input="${i}"
-                                   maxlength="500"
-                                   placeholder="What did you do on this today?"/>
+                            <textarea class="form-control" data-mp-input="${i}" rows="2"
+                                      maxlength="500" style="resize:none; overflow:hidden; white-space:pre-wrap;"
+                                      placeholder="What did you do on this today?"></textarea>
                             <button class="btn btn-outline-primary" type="button" data-mp-save="${i}">Save</button>
                         </div>
                         <div class="small mt-1 d-none" data-mp-msg="${i}"></div>
@@ -5647,6 +5647,16 @@ export class KpiAction extends Component {
             const input = document.querySelector(`[data-mp-input="${i}"]`);
             const msg = document.querySelector(`[data-mp-msg="${i}"]`);
             if (!btn || !input) return;
+            // Multi-line summary: grows one line per line typed or pasted; Enter is
+            // a new line, Ctrl/Cmd+Enter saves.
+            const grow = () => {
+                input.style.height = 'auto';
+                input.style.height = (input.scrollHeight + input.offsetHeight - input.clientHeight) + 'px';
+            };
+            input.addEventListener("input", grow);
+            input.addEventListener("keydown", (ev) => {
+                if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); btn.click(); }
+            });
             btn.addEventListener("click", async () => {
                 const summary = (input.value || '').trim();
                 if (!summary) {

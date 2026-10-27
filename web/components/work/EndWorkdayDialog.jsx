@@ -6,7 +6,7 @@
    "Pause workday" sits here too (as on the Odoo board): stopping for a few
    hours and stopping for good are the same decision, made in one place. */
 import { useEffect, useState } from "react";
-import { Button, Input, Modal, Skeleton } from "@/components/ui";
+import { Button, Modal, Skeleton } from "@/components/ui";
 import * as S from "@/lib/services/kpiActions";
 import WorkdayTimeline from "./WorkdayTimeline";
 
@@ -157,6 +157,9 @@ export function Summary({ d, readOnly = false, onLeft }) {
   );
 }
 
+/* The summary box grows one line per line typed or pasted. */
+const grow = (el) => { if (!el) return; el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; };
+
 /* Tasks worked on today with no progress note: a summary for each is REQUIRED
    before the day ends. Reports how many are left so End can stay disabled. */
 function MissingProgress({ items, onLeft }) {
@@ -181,8 +184,11 @@ function MissingProgress({ items, onLeft }) {
         <div key={m.kpi_id} className="ewd-prog">
           <span className="ewd-prog-name"><span className="ref">{m.external_ref || `#${m.kpi_id}`}</span> {m.name}</span>
           {saved[m.kpi_id] ? <span className="mini" style={{ color: "var(--pri-regular)", fontWeight: 700 }}>Saved ✓</span> : (
-            <span className="ewd-prog-row">
-              <Input value={text[m.kpi_id] || ""} maxLength={500} placeholder="What did you do on this today?" onChange={(e) => setText((t) => ({ ...t, [m.kpi_id]: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter") save(m); }} />
+            <span className="ewd-prog-row" style={{ alignItems: "flex-end" }}>
+              {/* Multi-line: Enter is a new line (pasted lines stay lines), Ctrl/Cmd+Enter saves. */}
+              <span className="input ta" style={{ height: "auto", minHeight: 32 }}>
+                <textarea ref={grow} rows={2} value={text[m.kpi_id] || ""} maxLength={500} placeholder="What did you do on this today? (Ctrl+Enter to save)" onChange={(e) => { grow(e.target); setText((t) => ({ ...t, [m.kpi_id]: e.target.value })); }} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(m); } }} style={{ border: 0, background: "none", outline: 0, resize: "none", overflow: "hidden", width: "100%", font: "inherit", color: "inherit", lineHeight: 1.4, whiteSpace: "pre-wrap" }} />
+              </span>
               <Button size="sm" busy={busy === m.kpi_id} disabled={!(text[m.kpi_id] || "").trim()} onClick={() => save(m)}>Save</Button>
             </span>
           )}

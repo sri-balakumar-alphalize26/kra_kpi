@@ -702,10 +702,42 @@ class KpiWorkdaySnapshot(models.Model):
             y += 22
         y += 6
 
-        if p.get('note'):
-            text((PAD, y), 'Note: %s' % ellipsize(p['note'], f_txt, IMG_W - PAD * 2 - 60),
-                 f_txt, C_MUTED)
-            y += 24
+        # The note keeps the user's lines (End Workday summaries are multi-line):
+        # "*Task*" headings in bold, each summary line under it, a long line
+        # wrapped to at most 3 rows. _clean() flattens newlines, so split first.
+        note = (p.get('note') or '').replace('\r\n', '\n').strip()
+        if note:
+            def wrap(s, font, maxw, rows=3):
+                words, out, cur = _clean(s).split(' '), [], ''
+                for w in words:
+                    nxt = (cur + ' ' + w) if cur else w
+                    if cur and width(nxt, font) > maxw:
+                        out.append(cur)
+                        cur = w
+                    else:
+                        cur = nxt
+                if cur:
+                    out.append(cur)
+                if len(out) > rows:
+                    out = out[:rows - 1] + [' '.join(out[rows - 1:])]
+                return [ellipsize(x, font, maxw) for x in out]
+
+            text((PAD, y), 'Note', f_bold, C_INK)
+            y += 20
+            maxw = IMG_W - PAD * 2 - 24
+            for raw in note.split('\n')[:80]:
+                ln = raw.strip()
+                if not ln:
+                    y += 8
+                    continue
+                if len(ln) > 2 and ln.startswith('*') and ln.endswith('*'):
+                    text((PAD + 4, y), ellipsize(ln[1:-1], f_bold, maxw), f_bold, C_INK)
+                    y += 19
+                    continue
+                for row in wrap(ln, f_txt, maxw - 14):
+                    text((PAD + 18, y), row, f_txt, C_MUTED)
+                    y += 18
+            y += 8
 
         img = img.crop((0, 0, IMG_W, min(canvas_h, int(y) + PAD)))
         buf = io.BytesIO()
