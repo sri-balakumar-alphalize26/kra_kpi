@@ -1765,7 +1765,8 @@ class KpiWaStaffTask(models.AbstractModel):
             # Waiting on an approver again: the approval chain, from step 1.
             if rec.is_self_created and not rec.admin_accepted:
                 rec._wa_ask_admins('self_task')
-            rec.resume_task()
+            # The reason rides along so the developer's private copy says "changed: …" too.
+            rec.with_context(kpi_resume_reason=reason).resume_task()
         except Exception as exc:
             state._reset()
             self._text(message, _('%(ref)s: %(why)s') % {'ref': self._ref(task), 'why': str(exc).strip()[:300]})

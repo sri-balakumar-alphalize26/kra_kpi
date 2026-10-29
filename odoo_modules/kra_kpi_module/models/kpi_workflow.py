@@ -855,6 +855,11 @@ class KpiWorkflow(models.Model):
         except Exception as exc:
             _logger.warning("wa group line for %s on %s failed: %s", event, self.ids, exc)
         try:
+            # Start / resume, every channel: the same line in the developer's own chat.
+            self._wa_dm_lifecycle(event)
+        except Exception as exc:
+            _logger.warning("wa private line for %s on %s failed: %s", event, self.ids, exc)
+        try:
             self._notify(event, prev_state=prev_state, **(payload or {}))
         except Exception as exc:
             try:

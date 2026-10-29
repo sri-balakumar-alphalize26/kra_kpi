@@ -17,6 +17,10 @@ _mark_action_source) put `kpi_action_source` in the context. The bot, the
 WhatsApp pages, crons and the shell never do, so they never post twice.
 Finishing a task is not here: kpi_finish already tells the group on every
 channel.
+
+THE DEVELOPER'S OWN COPY: a start or resume also sends the same line to the
+task's developer in their private chat, from every channel -- web, app and the
+bot (_wa_dm_lifecycle). A switch, quiet in the group, still sends it.
 """
 
 import logging
@@ -52,6 +56,17 @@ def _post_in_background(dbname, text):
             env['kpi.wa.group.report']._post(text, jid=group.jid if group else None)
     except Exception as exc:
         _logger.warning('wa group activity post failed: %s', exc)
+
+
+def _dm_in_background(dbname, user_id, text):
+    """Thread body: the same line, to one person's own number. Never raises."""
+    try:
+        from odoo.modules.registry import Registry
+        with Registry(dbname).cursor() as cr:
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            env['kpi.wa.group.report'].post_text_to_user(env['res.users'].browse(user_id), text)
+    except Exception as exc:
+        _logger.warning('wa private activity line failed: %s', exc)
 
 
 class KraKpiWaActivity(models.Model):
@@ -113,3 +128,35 @@ class KraKpiWaActivity(models.Model):
             else:
                 continue
             rec._wa_say_in_group(line)
+
+    def _wa_dm_lifecycle(self, event):
+        """start / resume: the group's line, privately to the task's developer.
+
+        Every channel, the bot's included (kpi_wa_state_id); crons and the
+        shell have neither marker and stay silent. Not held back by
+        kpi_wa_quiet: a switch still starts or resumes the developer's task."""
+        if event not in ('start', 'resume'):
+            return
+        src = self._wa_action_source()
+        if not src and not self.env.context.get('kpi_wa_state_id'):
+            return
+        actor = self.env.user
+        try:
+            mark = actor._kpi_wa_color()[0]
+        except Exception:
+            mark = ''
+        why = self.env.context.get('kpi_resume_reason')
+        dbname = self.env.cr.dbname
+        for rec in self:
+            vals = {'who': actor.name or '', 'ref': rec._wa_ref()}
+            if event == 'start':
+                line = WA_TAKEN % vals
+            else:
+                line = (WA_BACK_ON_CHANGED % dict(vals, why=why)) if why else WA_BACK_ON % vals
+            # No "· from web / app" tag: in their own chat it is just the line.
+            text = ('%s %s' % (mark, line)).strip()
+            dev_id = (rec.user_id or actor).id
+
+            def _start(dev_id=dev_id, text=text):
+                threading.Thread(target=_dm_in_background, args=(dbname, dev_id, text), daemon=True).start()
+            self.env.cr.postcommit.add(_start)
